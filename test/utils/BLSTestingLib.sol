@@ -2,7 +2,7 @@
 pragma solidity ^0.8;
 
 import {Vm} from "forge-std/src/Vm.sol";
-import {console2 as console} from "../lib/forge-std/src/Test.sol";
+import {console2 as console} from "../../lib/forge-std/src/Test.sol";
 
 struct BLSWallet {
     uint256 privateKey;

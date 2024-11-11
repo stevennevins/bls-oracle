@@ -3,7 +3,7 @@ pragma solidity ^0.8;
 
 import {Test, console2 as console} from "../lib/forge-std/src/Test.sol";
 import {BLSWrapper} from "./utils/BLSWrapper.sol";
-import {BLSTestingLib, BLSWallet} from "../contracts/BLSTestingLib.sol";
+import {BLSTestingLib, BLSWallet} from "./utils/BLSTestingLib.sol";
 
 contract BLSTestingLibTest is Test {
     string constant DOMAIN = "default-domain";

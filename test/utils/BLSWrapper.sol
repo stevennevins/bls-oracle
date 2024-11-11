@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8;
 
-import {BLS} from "../../contracts/BLS.sol";
+import {BLS} from "./BLS.sol";
 
 /// Expose library functions as a contract we can hit
 contract BLSWrapper {
