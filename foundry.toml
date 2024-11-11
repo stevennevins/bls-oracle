@@ -1,0 +1,27 @@
+[profile.default]
+ffi = true
+src = "contracts"
+out = "out"
+libs = ["lib"]
+optimizer = false
+gas_reports = ["BLSTestWrapper"]
+
+remappings = ["forge-std/=lib/forge-std/"]
+
+[profile.default.fuzz]
+runs = 10
+
+[profile.ci]
+optimizer = true
+
+[profile.ci.fuzz]
+runs = 256
+
+[fmt]
+bracket_spacing = false
+int_types = "long"
+line_length = 100
+multiline_func_header = "params_first"
+number_underscore = "thousands"
+quote_style = "double"
+tab_width = 4
