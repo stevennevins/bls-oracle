@@ -78,4 +78,11 @@ contract BLSWrapper {
     ) external pure returns (bool) {
         return BLS.isValidPublicKey(publicKey);
     }
+
+    function aggregate(
+        uint256[2] memory pk1,
+        uint256[2] memory pk2
+    ) external view returns (uint256[2] memory) {
+        return BLS.aggregate(pk1, pk2);
+    }
 }

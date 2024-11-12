@@ -6,7 +6,10 @@ libs = ["lib"]
 optimizer = false
 gas_reports = ["BLSTestWrapper"]
 
-remappings = ["forge-std/=lib/forge-std/"]
+remappings = [
+    "forge-std/=lib/forge-std/",
+    "@openzeppelin/=lib/openzeppelin-contracts/"
+]
 
 [profile.default.fuzz]
 runs = 10

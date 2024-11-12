@@ -373,6 +373,22 @@ library BLS {
         return int8(int256(x));
     }
 
+    function aggregate(
+        uint256[2] memory pk1,
+        uint256[2] memory pk2
+    ) internal view returns (uint256[2] memory apk) {
+        uint256[4] memory input;
+        input[0] = pk1[0];
+        input[1] = pk1[1];
+        input[2] = pk2[0];
+        input[3] = pk2[1];
+        bool success;
+        assembly {
+            success := staticcall(sub(gas(), 2000), 6, input, 0x80, apk, 0x40)
+        }
+        if (!success) revert BNAddFailed(input);
+    }
+
     /// @notice This is cheaper than an addchain for exponent (N-1)/2
     function modexpLegendre(
         uint256 u
