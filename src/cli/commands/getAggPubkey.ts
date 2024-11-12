@@ -1,7 +1,7 @@
 import { Command } from 'commander'
 import { BN254, serializeG2, aggregatePublicKeys } from '../../BN254'
 
-export async function getAggregatedPubKey(privateKeys: `0x${string}`[]) {
+async function getAggregatedPubKey(privateKeys: `0x${string}`[]) {
     const bls = await BN254.create()
 
     if (privateKeys.length === 0) {
@@ -9,14 +9,14 @@ export async function getAggregatedPubKey(privateKeys: `0x${string}`[]) {
     }
 
     const pubKeys = privateKeys.map(privateKey => {
-        const { pubKey } = bls.generateKeyPair(privateKey)
-        return pubKey
+        const { pubKeyG2 } = bls.generateKeyPair(privateKey)
+        return pubKeyG2
     })
     const aggregatedPubKey = aggregatePublicKeys(pubKeys)
     return serializeG2(aggregatedPubKey)
 }
 
-export const getAggPubkeyCommand = new Command('get-agg-pubkey')
+export const getAggPubkey = new Command('get-agg-pubkey')
     .description('Get aggregated BLS public key from multiple private keys')
     .argument('<privateKeyList>', 'Comma-separated list of private keys (hex)')
     .action(async (privateKeyList: string) => {

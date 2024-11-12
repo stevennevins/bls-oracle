@@ -373,6 +373,18 @@ library BLS {
         return int8(int256(x));
     }
 
+    function sub(
+        uint256[2] memory pk1,
+        uint256[2] memory pk2
+    ) internal view returns (uint256[2] memory) {
+        if (pk2[0] == 0 && pk2[1] == 0) {
+            revert("Invalid pk");
+        } else {
+            uint256[2] memory negPk2 = [pk2[0], N - (pk2[1] % N)];
+            return aggregate(pk1, negPk2);
+        }
+    }
+
     function aggregate(
         uint256[2] memory pk1,
         uint256[2] memory pk2

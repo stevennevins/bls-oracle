@@ -21,15 +21,17 @@ export class BN254 {
         return new BN254()
     }
 
-    public generateKeyPair(privateKeyHex: `0x${string}`): { secretKey: Fr; pubKey: G2 } {
+    public generateKeyPair(privateKeyHex: `0x${string}`): { secretKey: Fr; pubKeyG2: G2, pubKeyG1: G1} {
         if (!mcl.mod) {
             throw new Error('mcl not ready')
         }
         const secretKey: Fr = new mcl.Fr()
         secretKey.setHashOf(privateKeyHex)
-        const pubKey = mcl.mul(this.G2, secretKey)
-        pubKey.normalize()
-        return { secretKey, pubKey }
+        const pubKeyG2 = mcl.mul(this.G2, secretKey)
+        const pubKeyG1 = mcl.mul(this.G1, secretKey)
+        pubKeyG2.normalize()
+        pubKeyG1.normalize()
+        return { secretKey, pubKeyG2: pubKeyG2, pubKeyG1 }
     }
 
     public createGeneratorPoints(): { g1: G1; g2: G2 } {
@@ -64,8 +66,8 @@ export function serializeG1(point: G1): [bigint, bigint] {
         throw new Error('mcl not ready')
     }
     point.normalize()
-    const x = BigInt('0x' + reverseEndianness(point.getX().serializeToHexStr(), 32))
-    const y = BigInt('0x' + reverseEndianness(point.getY().serializeToHexStr(), 32))
+    const x = BigInt(`0x${reverseEndianness(point.getX().serializeToHexStr(), 32)}`)
+    const y = BigInt(`0x${reverseEndianness(point.getY().serializeToHexStr(), 32)}`)
 
     // Check for coordinate overflow
     if (x >= FIELD_ORDER || y >= FIELD_ORDER) {
@@ -81,10 +83,10 @@ export function serializeG2(point: G2): [bigint, bigint, bigint, bigint] {
     point.normalize()
     const x = point.getX()
     const y = point.getY()
-    const x0 = BigInt('0x' + reverseEndianness(x.get_a().serializeToHexStr(), 32))
-    const x1 = BigInt('0x' + reverseEndianness(x.get_b().serializeToHexStr(), 32))
-    const y0 = BigInt('0x' + reverseEndianness(y.get_a().serializeToHexStr(), 32))
-    const y1 = BigInt('0x' + reverseEndianness(y.get_b().serializeToHexStr(), 32))
+    const x0 = BigInt(`0x${reverseEndianness(x.get_a().serializeToHexStr(), 32)}`)
+    const x1 = BigInt(`0x${reverseEndianness(x.get_b().serializeToHexStr(), 32)}`)
+    const y0 = BigInt(`0x${reverseEndianness(y.get_a().serializeToHexStr(), 32)}`)
+    const y1 = BigInt(`0x${reverseEndianness(y.get_b().serializeToHexStr(), 32)}`)
     return [x0, x1, y0, y1]
 }
 

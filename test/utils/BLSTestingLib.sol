@@ -7,6 +7,7 @@ import {console2 as console} from "../../lib/forge-std/src/Test.sol";
 struct BLSWallet {
     uint256 privateKey;
     uint256[4] publicKey;
+    uint256[2] publicKeyG1;
 }
 
 library BLSTestingLib {
@@ -17,7 +18,28 @@ library BLSTestingLib {
     ) internal returns (BLSWallet memory) {
         uint256 privateKey = uint256(keccak256(abi.encodePacked(seed)));
         uint256[4] memory publicKey = getPublicKey(privateKey);
-        return BLSWallet({privateKey: privateKey, publicKey: publicKey});
+        uint256[2] memory publicKeyG1 = getPublicKeyG1(privateKey);
+        return BLSWallet({privateKey: privateKey, publicKey: publicKey, publicKeyG1: publicKeyG1});
+    }
+
+    function getPublicKeyG1(
+        uint256 privateKey
+    ) internal returns (uint256[2] memory) {
+        string[] memory inputs = new string[](4);
+        inputs[0] = "node";
+        inputs[1] = "./dist/cli/cli.js";
+        inputs[2] = "get-pubkey-g1";
+        inputs[3] = vm.toString(bytes32(privateKey));
+
+        bytes memory response = vm.ffi(inputs);
+        string memory jsonStr = string.concat("[", string(response), "]");
+
+        bytes memory jsonBytes = vm.parseJson(jsonStr);
+        uint256[4] memory decodedResponse = abi.decode(jsonBytes, (uint256[4]));
+        uint256[2] memory pubKey;
+        pubKey[0] = decodedResponse[2];
+        pubKey[1] = decodedResponse[3];
+        return pubKey;
     }
 
     function getPublicKey(

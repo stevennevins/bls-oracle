@@ -3,7 +3,7 @@ import { getBytes, isHexString, toUtf8Bytes } from 'ethers'
 import { BN254, serializeG1, signMessage } from '../../BN254'
 import { hashToPoint } from "../../pointOps"
 
-export async function signMessageWithKey(privateKey: `0x${string}`, domain: string, msg: string) {
+async function signMessageWithKey(privateKey: `0x${string}`, domain: string, msg: string) {
     const bls = await BN254.create()
     const msgBytes = isHexString(msg) ? getBytes(msg) : toUtf8Bytes(msg)
     const dstBytes = toUtf8Bytes(domain)
@@ -13,7 +13,7 @@ export async function signMessageWithKey(privateKey: `0x${string}`, domain: stri
     return serializeG1(signature)
 }
 
-export const signMessageCommand = new Command('sign')
+export const sign = new Command('sign')
     .description('Sign a message with a private key')
     .argument('<privateKey>', 'Private key (hex)')
     .argument('<domain>', 'Domain string')

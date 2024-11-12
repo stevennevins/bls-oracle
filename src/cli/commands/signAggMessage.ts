@@ -17,14 +17,14 @@ async function signAggregateMessages(privateKeys: `0x${string}`[], domain: strin
     return serializeG1(aggregatedSig)
 }
 
-export const signAggMessageCommand = new Command('sign-agg')
+export const signAggMessage = new Command('sign-agg')
     .description('Sign a message with multiple private keys and aggregate the signatures')
     .argument('<privateKeyList>', 'Comma-separated list of private keys (hex)')
     .argument('<domain>', 'Domain string')
     .argument('<message>', 'Message to sign (hex or utf8)')
     .action(async (privateKeyList: string, domain: string, message: string) => {
         const privateKeys = privateKeyList.split(',') as `0x${string}`[]
-        
+
         if (privateKeys.length === 0) {
             console.error('At least one private key is required')
             process.exit(1)

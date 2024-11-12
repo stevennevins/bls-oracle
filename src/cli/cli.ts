@@ -1,15 +1,17 @@
 #!/usr/bin/env node
 const { program } = require('commander');
-const { getPubkeyCommand } = require('./commands/getPubkey');
-const { getAggPubkeyCommand } = require('./commands/getAggPubkey');
-const { hashMessageCommand } = require('./commands/hashMessage');
-const { signMessageCommand } = require('./commands/signMessage')
-const { signAggMessageCommand } = require('./commands/signAggMessage')
+const { getPubkey } = require('./commands/getPubkey');
+const { getPubkeyG1 } = require('./commands/getPubkeyG1');
+const { getAggPubkey } = require('./commands/getAggPubkey');
+const { hashMessage } = require('./commands/hashMessage');
+const { sign } = require('./commands/signMessage')
+const { signAggMessage } = require('./commands/signAggMessage')
 
-program.addCommand(getPubkeyCommand);
-program.addCommand(getAggPubkeyCommand);
-program.addCommand(hashMessageCommand);
-program.addCommand(signMessageCommand);
-program.addCommand(signAggMessageCommand);
+program.addCommand(getPubkey);
+program.addCommand(getPubkeyG1);
+program.addCommand(getAggPubkey);
+program.addCommand(hashMessage);
+program.addCommand(sign);
+program.addCommand(signAggMessage);
 
 program.parse(process.argv);

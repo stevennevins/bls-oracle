@@ -102,7 +102,8 @@ contract Registry is Ownable {
             if (!isRegistered(operatorId)) {
                 revert NotRegistered(operatorId);
             }
-            apk = BLS.aggregate(apk, apk); /// TODO: Fix
+            apk = BLS.aggregate(apk, apk);
+            /// TODO: Fix
         }
 
         return apk;
