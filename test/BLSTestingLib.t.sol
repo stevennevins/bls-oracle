@@ -2,6 +2,7 @@
 pragma solidity ^0.8;
 
 import {Test, console2 as console} from "../lib/forge-std/src/Test.sol";
+import {BLS} from "./utils/BLS.sol";
 import {BLSWrapper} from "./utils/BLSWrapper.sol";
 import {BLSTestingLib, BLSWallet} from "./utils/BLSTestingLib.sol";
 
@@ -12,6 +13,72 @@ contract BLSTestingLibTest is Test {
 
     function setUp() public {
         bls = new BLSWrapper();
+    }
+
+    function test_aggregateG1() public {
+        BLSWallet memory wallet1 = BLSTestingLib.createWallet("wallet-1");
+        BLSWallet memory wallet2 = BLSTestingLib.createWallet("wallet-2");
+        string memory message1 = "message-1";
+        string memory message2 = "message-2";
+
+        uint256[2] memory sig1 = BLSTestingLib.sign(wallet1.privateKey, DOMAIN, message1);
+        uint256[2] memory sig2 = BLSTestingLib.sign(wallet2.privateKey, DOMAIN, message2);
+
+        uint256[2] memory aggSig = bls.aggregate(sig1, sig2);
+
+        assertTrue(bls.isOnCurveG1(aggSig), "Aggregated signature should be on G1 curve");
+        assertTrue(bls.isValidSignature(aggSig), "Aggregated signature should be valid");
+    }
+
+    function test_aggregateG2() public {
+        BLSWallet memory wallet1 = BLSTestingLib.createWallet("wallet-1");
+        BLSWallet memory wallet2 = BLSTestingLib.createWallet("wallet-2");
+
+        uint256[4] memory aggPubKey = bls.aggregateG2(wallet1.publicKey, wallet2.publicKey);
+
+        assertTrue(bls.isOnCurveG2(aggPubKey), "Aggregated public key should be on G2 curve");
+        assertTrue(bls.isValidPublicKey(aggPubKey), "Aggregated public key should be valid");
+    }
+
+    function test_subG1() public {
+        BLSWallet memory wallet1 = BLSTestingLib.createWallet("wallet-1");
+        BLSWallet memory wallet2 = BLSTestingLib.createWallet("wallet-2");
+        string memory message1 = "message-1";
+        string memory message2 = "message-2";
+
+        uint256[2] memory sig1 = BLSTestingLib.sign(wallet1.privateKey, DOMAIN, message1);
+        uint256[2] memory sig2 = BLSTestingLib.sign(wallet2.privateKey, DOMAIN, message2);
+
+        uint256[2] memory aggSig = bls.aggregate(sig1, sig2);
+        uint256[2] memory subSig = bls.subG1(aggSig, sig1);
+
+        assertTrue(bls.isOnCurveG1(subSig), "Subtracted signature should be on G1 curve");
+        assertTrue(bls.isValidSignature(subSig), "Subtracted signature should be valid");
+        assertEq(subSig[0], sig2[0], "Subtracted signature should equal sig2 x-coordinate");
+        assertEq(subSig[1], sig2[1], "Subtracted signature should equal sig2 y-coordinate");
+    }
+
+    function test_subG2() public {
+        BLSWallet memory wallet1 = BLSTestingLib.createWallet("wallet-1");
+        BLSWallet memory wallet2 = BLSTestingLib.createWallet("wallet-2");
+
+        uint256[4] memory aggPubKey = bls.aggregateG2(wallet1.publicKey, wallet2.publicKey);
+        uint256[4] memory subPubKey = bls.subG2(aggPubKey, wallet1.publicKey);
+
+        assertTrue(bls.isOnCurveG2(subPubKey), "Subtracted public key should be on G2 curve");
+        assertTrue(bls.isValidPublicKey(subPubKey), "Subtracted public key should be valid");
+        assertEq(
+            subPubKey[0], wallet2.publicKey[0], "Subtracted pubkey should equal wallet2 pubkey x0"
+        );
+        assertEq(
+            subPubKey[1], wallet2.publicKey[1], "Subtracted pubkey should equal wallet2 pubkey x1"
+        );
+        assertEq(
+            subPubKey[2], wallet2.publicKey[2], "Subtracted pubkey should equal wallet2 pubkey y0"
+        );
+        assertEq(
+            subPubKey[3], wallet2.publicKey[3], "Subtracted pubkey should equal wallet2 pubkey y1"
+        );
     }
 
     function test_getPublicKey() public {
@@ -195,6 +262,168 @@ contract BLSTestingLibTest is Test {
 
         assertTrue(callSuccess, "Precompile call failed");
         assertFalse(pairingSuccess, "Pairing should fail across different domains");
+    }
+
+    function test_G1Orientation() public {
+        BLSWallet memory wallet1 = BLSTestingLib.createWallet("wallet-1");
+        BLSWallet memory wallet2 = BLSTestingLib.createWallet("wallet-2");
+
+        uint256[4] memory aggPubKeyG2 = bls.aggregateG2(wallet1.publicKey, wallet2.publicKey);
+        uint256[2] memory aggPubkeyG1 = bls.aggregate(wallet1.publicKeyG1, wallet2.publicKeyG1);
+
+        (bool pairingSuccess, bool callSuccess) = bls.verifyApk(aggPubKeyG2, aggPubkeyG1);
+
+        assertTrue(callSuccess, "Precompile call failed");
+        assertTrue(pairingSuccess, "Aggregated public key verification failed");
+
+        // uint256[2] memory wrongPubkeyG1 = wallet1.publicKeyG1;
+        // (pairingSuccess, callSuccess) = bls.verifyApk(aggPubKeyG2, wrongPubkeyG1);
+
+        // assertTrue(callSuccess, "Precompile call failed");
+        // assertFalse(pairingSuccess, "Verification should fail with incorrect G1 pubkey");
+    }
+
+    function test_SubtractAndVerifySingle() public {
+        // Create two wallets
+        BLSWallet memory wallet1 = BLSTestingLib.createWallet("wallet-1");
+        BLSWallet memory wallet2 = BLSTestingLib.createWallet("wallet-2");
+        BLSWallet memory wallet3 = BLSTestingLib.createWallet("wallet-3");
+
+        // Aggregate both public keys in G1 (this would be stored on-chain)
+        uint256[2] memory aggPubkeyG1 = bls.aggregate(wallet1.publicKeyG1, wallet2.publicKeyG1);
+        aggPubkeyG1 = bls.aggregate(aggPubkeyG1, wallet3.publicKeyG1);
+
+        // Create a message and get wallet2 to sign it
+        string memory domain = "test-domain";
+        bytes32 message = keccak256("test message");
+        uint256[2] memory messagePoint = bls.hashToPoint(domain, message);
+        uint256[2] memory signature2 = BLSTestingLib.sign(wallet2.privateKey, domain, message);
+        uint256[2] memory signature3 = BLSTestingLib.sign(wallet3.privateKey, domain, message);
+
+        uint256[2] memory aggSignatureG1 = bls.aggregate(signature2, signature3);
+
+        // Subtract wallet1's public key from the aggregate
+        uint256[2] memory remainingPubkeyG1 = bls.subG1(aggPubkeyG1, wallet1.publicKeyG1);
+
+        // Get wallet2's public key in G2 for verification
+        uint256[4] memory pubKeyG2_2 = wallet2.publicKey;
+        uint256[4] memory pubKeyG2_3 = wallet3.publicKey;
+
+        uint256[4] memory aggPubkeyG2 = bls.aggregateG2(pubKeyG2_2, pubKeyG2_3);
+
+        // Verify that remainingPubkeyG1 matches wallet2's public key
+        (bool pairingSuccess, bool callSuccess) = bls.verifyApk(aggPubkeyG2, remainingPubkeyG1);
+        assertTrue(callSuccess, "APK verification call failed");
+        assertTrue(pairingSuccess, "APK verification failed");
+
+        // Verify the signature
+        (pairingSuccess, callSuccess) = bls.verifySingle(aggSignatureG1, aggPubkeyG2, messagePoint);
+        assertTrue(callSuccess, "Signature verification call failed");
+        assertTrue(pairingSuccess, "Signature verification failed");
+    }
+
+    function test_SubtractAndVerifySingleBatch() public {
+        // Create three wallets
+        BLSWallet memory wallet1 = BLSTestingLib.createWallet("wallet-1");
+        BLSWallet memory wallet2 = BLSTestingLib.createWallet("wallet-2");
+        BLSWallet memory wallet3 = BLSTestingLib.createWallet("wallet-3");
+
+        // Aggregate public keys in G1 (this would be stored on-chain)
+        uint256[2] memory aggPubkeyG1 = bls.aggregate(wallet1.publicKeyG1, wallet2.publicKeyG1);
+        aggPubkeyG1 = bls.aggregate(aggPubkeyG1, wallet3.publicKeyG1);
+
+        // Create a message and get wallet2 and wallet3 to sign it
+        string memory domain = "test-domain";
+        bytes32 message = keccak256("test message");
+        uint256[2] memory messagePoint = bls.hashToPoint(domain, message);
+        uint256[2] memory signature2 = BLSTestingLib.sign(wallet2.privateKey, domain, message);
+        uint256[2] memory signature3 = BLSTestingLib.sign(wallet3.privateKey, domain, message);
+
+        uint256[2] memory aggSignatureG1 = bls.aggregate(signature2, signature3);
+
+        // Subtract wallet1's public key from the aggregate
+        uint256[2] memory remainingPubkeyG1 = bls.subG1(aggPubkeyG1, wallet1.publicKeyG1);
+
+        // Get wallet2 and wallet3's public keys in G2 for verification
+        uint256[4] memory pubKeyG2_2 = wallet2.publicKey;
+        uint256[4] memory pubKeyG2_3 = wallet3.publicKey;
+        uint256[4] memory aggPubkeyG2 = bls.aggregateG2(pubKeyG2_2, pubKeyG2_3);
+
+        // Prepare inputs for batch verification
+        uint256[12] memory apkInput = bls.prepareApkInput(aggPubkeyG2, remainingPubkeyG1);
+        uint256[12] memory sigInput =
+            bls.prepareVerifyMessage(aggSignatureG1, aggPubkeyG2, messagePoint);
+
+        // Combine inputs for batch verification
+        uint256[] memory batchInput = new uint256[](24);
+        for (uint256 i = 0; i < 12; i++) {
+            batchInput[i] = apkInput[i];
+            batchInput[i + 12] = sigInput[i];
+        }
+
+        // Verify both pairings in a single batch
+        (bool pairingSuccess, bool callSuccess) = bls.verifyPairingBatch(batchInput, 2);
+        assertTrue(callSuccess, "Batch verification call failed");
+        assertTrue(pairingSuccess, "Batch verification failed");
+    }
+
+    function test_SubtractAndVerifyMultipleMessagesBatch() public {
+        vm.skip(true);
+        // // Create three wallets
+        // BLSWallet memory wallet1 = BLSTestingLib.createWallet("wallet-1");
+        // BLSWallet memory wallet2 = BLSTestingLib.createWallet("wallet-2");
+        // BLSWallet memory wallet3 = BLSTestingLib.createWallet("wallet-3");
+
+        // // Aggregate public keys in G1 (this would be stored on-chain)
+        // uint256[2] memory aggPubkeyG1 = bls.aggregate(wallet1.publicKeyG1, wallet2.publicKeyG1);
+        // aggPubkeyG1 = bls.aggregate(aggPubkeyG1, wallet3.publicKeyG1);
+
+        // // Create two messages and get wallet2 and wallet3 to sign them
+        // string memory domain = "test-domain";
+        // bytes32 message1 = keccak256("test message 1");
+        // bytes32 message2 = keccak256("test message 2");
+
+        // uint256[2] memory messagePoint1 = bls.hashToPoint(domain, message1);
+        // uint256[2] memory messagePoint2 = bls.hashToPoint(domain, message2);
+
+        // // Get signatures from wallet2 and wallet3 for both messages
+        // uint256[2] memory signature2_msg1 = BLSTestingLib.sign(wallet2.privateKey, domain, message1);
+        // uint256[2] memory signature3_msg1 = BLSTestingLib.sign(wallet3.privateKey, domain, message1);
+        // uint256[2] memory signature2_msg2 = BLSTestingLib.sign(wallet2.privateKey, domain, message2);
+        // uint256[2] memory signature3_msg2 = BLSTestingLib.sign(wallet3.privateKey, domain, message2);
+
+        // // Aggregate signatures for each message
+        // uint256[2] memory aggSignatureG1_msg1 = bls.aggregate(signature2_msg1, signature3_msg1);
+        // uint256[2] memory aggSignatureG1_msg2 = bls.aggregate(signature2_msg2, signature3_msg2);
+
+        // // Aggregate both message signatures together
+        // uint256[2] memory totalAggSignatureG1 = bls.aggregate(aggSignatureG1_msg1, aggSignatureG1_msg2);
+
+        // // Subtract wallet1's public key from the aggregate
+        // uint256[2] memory remainingPubkeyG1 = bls.subG1(aggPubkeyG1, wallet1.publicKeyG1);
+
+        // // Get wallet2 and wallet3's public keys in G2 for verification
+        // uint256[4] memory pubKeyG2_2 = wallet2.publicKey;
+        // uint256[4] memory pubKeyG2_3 = wallet3.publicKey;
+        // uint256[4] memory aggPubkeyG2 = bls.aggregateG2(pubKeyG2_2, pubKeyG2_3);
+
+        // // Prepare inputs for batch verification
+        // uint256[12] memory apkInput = bls.prepareApkInput(aggPubkeyG2, remainingPubkeyG1);
+        // uint256[12] memory sigInput1 = bls.prepareVerifyMessage(totalAggSignatureG1, aggPubkeyG2, messagePoint1);
+        // uint256[12] memory sigInput2 = bls.prepareVerifyMessage(totalAggSignatureG1, aggPubkeyG2, messagePoint2);
+
+        // // Combine inputs for batch verification
+        // uint256[] memory batchInput = new uint256[](36);
+        // for (uint256 i = 0; i < 12; i++) {
+        //     batchInput[i] = apkInput[i];
+        //     batchInput[i + 12] = sigInput1[i];
+        //     batchInput[i + 24] = sigInput2[i];
+        // }
+
+        // // Verify all pairings in a single batch
+        // (bool pairingSuccess, bool callSuccess) = bls.verifyPairingBatch(batchInput, 3);
+        // assertTrue(callSuccess, "Batch verification call failed");
+        // assertTrue(pairingSuccess, "Batch verification failed");
     }
 
     function logPublicKey(

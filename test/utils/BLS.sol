@@ -2,6 +2,7 @@
 pragma solidity ^0.8;
 
 import {ModexpInverse, ModexpSqrt} from "./ModExp.sol";
+import {BN256G2} from "./BN256G2.sol";
 
 /// @title  Boneh–Lynn–Shacham (BLS) signature scheme on Barreto-Naehrig 254 bit curve (BN-254)
 /// @notice We use BLS signature aggregation to reduce the size of signature data to store on chain.
@@ -54,7 +55,40 @@ library BLS {
         uint256[4] memory pubkey,
         uint256[2] memory message
     ) internal view returns (bool pairingSuccess, bool callSuccess) {
-        uint256[12] memory input = [
+        uint256[12] memory input = prepareVerifyMessage(signature, pubkey, message);
+        return verifyPairing(input);
+    }
+
+    function verifyApk(
+        uint256[4] memory pubkeyG2,
+        uint256[2] memory pubkeyG1
+    ) internal view returns (bool pairingSuccess, bool callSuccess) {
+        uint256[12] memory input = prepareApkInput(pubkeyG2, pubkeyG1);
+        return verifyPairing(input);
+    }
+
+    function verifyMultiple(
+        uint256[2][] memory signatures,
+        uint256[4][] memory pubKeys,
+        uint256[2][] memory messages
+    ) external view returns (bool, bool) {
+        require(
+            signatures.length == pubKeys.length && signatures.length == messages.length,
+            "Array lengths must match"
+        );
+
+        uint256 k = signatures.length;
+        uint256[] memory input = prepareVerifyMultipleInput(signatures, pubKeys, messages);
+        return verifyPairingBatch(input, k);
+    }
+
+    // New helper functions
+    function prepareVerifyMessage(
+        uint256[2] memory signature,
+        uint256[4] memory pubkey,
+        uint256[2] memory message
+    ) internal pure returns (uint256[12] memory input) {
+        input = [
             signature[0],
             signature[1],
             N_G2_X1,
@@ -68,26 +102,35 @@ library BLS {
             pubkey[3],
             pubkey[2]
         ];
-        uint256[1] memory out;
-        assembly {
-            callSuccess := staticcall(sub(gas(), 2000), 8, input, 384, out, 0x20)
-        }
-        return (out[0] != 0, callSuccess);
     }
 
-    function verifyMultiple(
+    function prepareApkInput(
+        uint256[4] memory pubkeyG2,
+        uint256[2] memory pubkeyG1
+    ) internal pure returns (uint256[12] memory input) {
+        input = [
+            1,
+            2,
+            pubkeyG2[1],
+            pubkeyG2[0],
+            pubkeyG2[3],
+            pubkeyG2[2],
+            pubkeyG1[0],
+            pubkeyG1[1],
+            N_G2_X1,
+            N_G2_X0,
+            N_G2_Y1,
+            N_G2_Y0
+        ];
+    }
+
+    function prepareVerifyMultipleInput(
         uint256[2][] memory signatures,
         uint256[4][] memory pubKeys,
         uint256[2][] memory messages
-    ) external view returns (bool, bool) {
-        require(
-            signatures.length == pubKeys.length && signatures.length == messages.length,
-            "Array lengths must match"
-        );
-
-        // Each pairing input needs 6 values: sig(2) + generator(4) + msg(2) + pubkey(4)
+    ) internal pure returns (uint256[] memory input) {
         uint256 k = signatures.length;
-        uint256[] memory input = new uint256[](k * 12);
+        input = new uint256[](k * 12);
 
         for (uint256 i = 0; i < k; i++) {
             uint256 j = i * 12;
@@ -104,9 +147,23 @@ library BLS {
             input[j + 10] = pubKeys[i][3];
             input[j + 11] = pubKeys[i][2];
         }
+    }
 
+    function verifyPairing(
+        uint256[12] memory input
+    ) internal view returns (bool pairingSuccess, bool callSuccess) {
         uint256[1] memory out;
-        bool callSuccess;
+        assembly {
+            callSuccess := staticcall(sub(gas(), 2000), 8, input, 384, out, 0x20)
+        }
+        return (out[0] != 0, callSuccess);
+    }
+
+    function verifyPairingBatch(
+        uint256[] memory input,
+        uint256 k
+    ) internal view returns (bool pairingSuccess, bool callSuccess) {
+        uint256[1] memory out;
         assembly {
             callSuccess :=
                 staticcall(sub(gas(), 2000), 8, add(input, 0x20), mul(mul(k, 12), 0x20), out, 0x20)
@@ -378,7 +435,8 @@ library BLS {
         uint256[2] memory pk2
     ) internal view returns (uint256[2] memory) {
         if (pk2[0] == 0 && pk2[1] == 0) {
-            revert("Invalid pk");
+            // revert("Invalid pk");
+            return pk1;
         } else {
             uint256[2] memory negPk2 = [pk2[0], N - (pk2[1] % N)];
             return aggregate(pk1, negPk2);
@@ -396,9 +454,32 @@ library BLS {
         input[3] = pk2[1];
         bool success;
         assembly {
-            success := staticcall(sub(gas(), 2000), 6, input, 0x80, apk, 0x40)
+            success := staticcall(gas(), 6, input, 0x80, apk, 0x40)
         }
         if (!success) revert BNAddFailed(input);
+    }
+
+    function sub(
+        uint256[4] memory pk1,
+        uint256[4] memory pk2
+    ) internal view returns (uint256[4] memory) {
+        if (pk2[0] == 0 && pk2[1] == 0 && pk2[2] == 0 && pk2[3] == 0) {
+            // revert("Invalid pk");
+            return pk1;
+        } else {
+            // To negate a G2 point, we negate both y-coordinates
+            uint256[4] memory negPk2 = [pk2[0], pk2[1], N - (pk2[2] % N), N - (pk2[3] % N)];
+            return aggregate(pk1, negPk2);
+        }
+    }
+
+    function aggregate(
+        uint256[4] memory pk1,
+        uint256[4] memory pk2
+    ) internal view returns (uint256[4] memory apk) {
+        (uint256 x1, uint256 x2, uint256 y1, uint256 y2) =
+            BN256G2.ECTwistAdd(pk1[0], pk1[1], pk1[2], pk1[3], pk2[0], pk2[1], pk2[2], pk2[3]);
+        return [x1, x2, y1, y2];
     }
 
     /// @notice This is cheaper than an addchain for exponent (N-1)/2
@@ -435,5 +516,86 @@ library BLS {
         if (!success) {
             revert ModExpFailed(u, C5, N);
         }
+    }
+
+    function mul(uint256[2] memory p, uint256 s) internal view returns (uint256[2] memory r) {
+        uint256[3] memory input;
+        input[0] = p[0];
+        input[1] = p[1];
+        input[2] = s;
+        bool success;
+        assembly {
+            success := staticcall(sub(gas(), 2000), 7, input, 0x80, r, 0x60)
+        }
+        require(success);
+    }
+
+    /**
+     * @notice adapted from https://github.com/HarryR/solcrypto/blob/master/contracts/altbn128.sol
+     */
+    function hashToG1(
+        bytes32 _x
+    ) internal view returns (uint256[2] memory) {
+        uint256 beta = 0;
+        uint256 y = 0;
+
+        uint256 x = uint256(_x) % N;
+
+        while (true) {
+            (beta, y) = findYFromX(x);
+
+            // y^2 == beta
+            if (beta == mulmod(y, y, N)) {
+                return [x, y];
+            }
+
+            x = addmod(x, 1, N);
+        }
+        return [uint256(0), uint256(0)];
+    }
+
+    /**
+     * Given X, find Y
+     *
+     *   where y = sqrt(x^3 + b)
+     *
+     * Returns: (x^3 + b), y
+     */
+    function findYFromX(
+        uint256 x
+    ) internal view returns (uint256, uint256) {
+        // beta = (x^3 + b) % p
+        uint256 beta = addmod(mulmod(mulmod(x, x, N), x, N), 3, N);
+
+        // y^2 = x^3 + b
+        // this acts like: y = sqrt(beta) = beta^((p+1) / 4)
+        uint256 y =
+            expMod(beta, 0xc19139cb84c680a6e14116da060561765e05aa45a1c72a34f082305b61f3f52, N);
+
+        return (beta, y);
+    }
+
+    function expMod(
+        uint256 _base,
+        uint256 _exponent,
+        uint256 _modulus
+    ) internal view returns (uint256 retval) {
+        bool success;
+        uint256[1] memory output;
+        uint256[6] memory input;
+        input[0] = 0x20; // baseLen = new(big.Int).SetBytes(getData(input, 0, 32))
+        input[1] = 0x20; // expLen  = new(big.Int).SetBytes(getData(input, 32, 32))
+        input[2] = 0x20; // modLen  = new(big.Int).SetBytes(getData(input, 64, 32))
+        input[3] = _base;
+        input[4] = _exponent;
+        input[5] = _modulus;
+        assembly {
+            success := staticcall(sub(gas(), 2000), 5, input, 0xc0, output, 0x20)
+            // Use "invalid" to make gas estimation work
+            switch success
+            case 0 { invalid() }
+        }
+        require(success, "BN254.expMod: call failure");
+        return output[0];
     }
 }

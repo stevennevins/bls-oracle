@@ -4,7 +4,8 @@ src = "contracts"
 out = "out"
 libs = ["lib"]
 optimizer = false
-gas_reports = ["BLSTestWrapper"]
+gas_reports = ["BLSWrapper", "Registry", "Oracle"]
+solc = "0.8.27"
 
 remappings = [
     "forge-std/=lib/forge-std/",
@@ -15,7 +16,7 @@ remappings = [
 runs = 10
 
 [profile.ci]
-optimizer = true
+optimizer = false
 
 [profile.ci.fuzz]
 runs = 256
