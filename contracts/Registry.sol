@@ -24,8 +24,11 @@ contract Registry is Ownable, EIP712 {
     mapping(address => uint8) public operatorIds;
     uint8 public nextOperatorId = 0;
 
+    /// TODO: make these mappings from epoch to values
+    /// makes knowing if we need to _processQueues easier
     uint256[2] internal apkG1;
     uint256 public operatorBitmap;
+    mapping(uint256 epoch => mapping(uint256 bitmap => uint256[2] apk)) public apkCache;
 
     // Epoch variables
     uint256 public constant SLOTS_PER_EPOCH = 24; // 1 day epochs
@@ -35,15 +38,12 @@ contract Registry is Ownable, EIP712 {
     // Entry/Exit queue variables
     uint256 public pendingEntries;
     uint256 public pendingExits;
-    uint256 public constant MAX_CHURN_ENTRIES = 4; // Maximum entries per epoch
-    uint256 public constant MAX_CHURN_EXITS = 4; // Maximum exits per epoch
-
-    /// TODO: If i use a sortition tree to pick who submits, I can place operators in the tree with 0 stake
-    /// and they won't be selected.  then they can allocate after their entry epoch.  Apks can be queued and added after crossing an
-    /// epoch boundary or we can eat the negations of these queued keys being non signing
-
-    /// Alternatively, register assigns entry epoch to be able to deposit and add their pk to the apk
-    /// maybe need some logic to make sure the the number of accounts dequeueing and queueing don't run into an issue
+    uint256 public constant MAX_QUEUE_ENTRY = 25; // Max pending entries
+    uint256 public constant MAX_QUEUE_EXIT = 25; // Max pending exits
+    mapping(uint256 epoch => uint256 bitmap) public pendingEntriesBitmap;
+    mapping(uint256 epoch => uint256 bitmap) public pendingExitsBitmap;
+    uint256 public constant MAX_CHURN_ENTRIES = 5; // Maximum entries per epoch
+    uint256 public constant MAX_CHURN_EXITS = 5; // Maximum exits per epoch
 
     bytes32 public constant REGISTRATION_TYPEHASH =
         keccak256("Registration(address operator,uint256[2] signingKey,uint256 totp)");
@@ -75,7 +75,11 @@ contract Registry is Ownable, EIP712 {
         if (!_validateKey(msg.sender, signingKey, proof)) {
             revert InvalidSignature();
         }
+        uint256 activationEpoch = _getNextEntryEpoch();
         uint8 operatorId = _register(msg.sender);
+        pendingEntries++;
+        pendingEntriesBitmap[activationEpoch] |= (1 << operatorId);
+        /// TODO: Remove these
         _updateSigningKey(operatorId, signingKey, proof.pubkeyG2);
         _updateApk(signingKey, true);
         _updateOperatorBitmap(operatorId, true);
@@ -83,28 +87,13 @@ contract Registry is Ownable, EIP712 {
     }
 
     function activate() external {
-        _activate();
+        uint8 operatorId = operatorIds[msg.sender];
+        _activate(operatorId);
     }
 
     function deactivate() external {
-        _deactivate();
-    }
-
-
-    function updateSigningKey(uint256[2] memory signingKey, Proof memory proof) external {
         uint8 operatorId = operatorIds[msg.sender];
-        if (!isRegistered(operatorId)) {
-            revert NotRegistered(operatorId);
-        }
-
-        if (!_validateKey(msg.sender, signingKey, proof)) {
-            revert InvalidSignature();
-        }
-
-        uint256[2] memory oldKey = operators[operatorId].signingKey;
-        _updateSigningKey(operatorId, signingKey, proof.pubkeyG2);
-        _updateApk(oldKey, false);
-        _updateApk(signingKey, true);
+        _deactivate(operatorId);
     }
 
     function deregister() external {
@@ -112,7 +101,11 @@ contract Registry is Ownable, EIP712 {
         if (!isRegistered(operatorId)) {
             revert NotRegistered(operatorId);
         }
+        uint256 exitEpoch = _getNextExitEpoch();
+        pendingExits++;
+        pendingExitsBitmap[exitEpoch] |= (1 << operatorId);
 
+        /// TODO: Move
         uint256[2] memory oldKey = operators[operatorId].signingKey;
         _deregister(operatorId);
         _updateSigningKey(
@@ -136,6 +129,22 @@ contract Registry is Ownable, EIP712 {
         );
         _updateApk(oldKey, false);
         _updateOperatorBitmap(operatorId, false);
+    }
+
+    function updateSigningKey(uint256[2] memory signingKey, Proof memory proof) external {
+        uint8 operatorId = operatorIds[msg.sender];
+        if (!isRegistered(operatorId)) {
+            revert NotRegistered(operatorId);
+        }
+
+        if (!_validateKey(msg.sender, signingKey, proof)) {
+            revert InvalidSignature();
+        }
+
+        uint256[2] memory oldKey = operators[operatorId].signingKey;
+        _updateSigningKey(operatorId, signingKey, proof.pubkeyG2);
+        _updateApk(oldKey, false);
+        _updateApk(signingKey, true);
     }
 
     function getOperator(
@@ -299,11 +308,13 @@ contract Registry is Ownable, EIP712 {
         emit OperatorBitmapUpdated(operatorBitmap);
     }
 
+    function _activate(
+        uint8 operatorId
+    ) internal {}
 
-
-    function _activate() internal {}
-
-    function _deactivate() internal {}
+    function _deactivate(
+        uint8 operatorId
+    ) internal {}
 
     function _getNextEntryEpoch() internal view returns (uint256) {
         uint256 currentSlot = EpochLib.currentSlot(genesisTime, SLOT_DURATION);
@@ -317,5 +328,42 @@ contract Registry is Ownable, EIP712 {
         uint256 currentEpoch = EpochLib.slotToEpoch(currentSlot, SLOTS_PER_EPOCH);
         uint256 epochsNeeded = (pendingExits + MAX_CHURN_EXITS - 1) / MAX_CHURN_EXITS;
         return currentEpoch + epochsNeeded;
+    }
+
+    function _processEntryQueue(
+        uint256 epoch
+    ) internal {
+        uint256 entriesBitmap = pendingEntriesBitmap[epoch];
+        if (entriesBitmap == 0) {
+            return;
+        }
+        for (uint8 i = 0; i < 256; i++) {
+            if ((entriesBitmap & (1 << i)) != 0) {
+                Operator storage op = operators[i];
+                _updateApk(op.signingKey, true);
+                _updateOperatorBitmap(i, true);
+                pendingEntries--;
+            }
+        }
+        delete pendingEntriesBitmap[epoch];
+    }
+
+    function _processExitQueue(
+        uint256 epoch
+    ) internal {
+        uint256 exitBitmap = pendingExitsBitmap[epoch];
+        if (exitBitmap == 0) {
+            return;
+        }
+        for (uint8 i = 0; i < 256; i++) {
+            if ((exitBitmap & (1 << i)) != 0) {
+                Operator storage op = operators[i];
+                _updateApk(op.signingKey, false);
+                _updateOperatorBitmap(i, false);
+                _deregister(i);
+                pendingExits--;
+            }
+        }
+        delete pendingExitsBitmap[epoch];
     }
 }
