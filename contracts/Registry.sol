@@ -3,6 +3,7 @@ pragma solidity ^0.8.16;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import {EpochLib} from "./EpochLib.sol";
 import {BLS} from "../test/utils/BLS.sol";
 
 contract Registry is Ownable, EIP712 {
@@ -26,6 +27,24 @@ contract Registry is Ownable, EIP712 {
     uint256[2] internal apkG1;
     uint256 public operatorBitmap;
 
+    // Epoch variables
+    uint256 public constant SLOTS_PER_EPOCH = 24; // 1 day epochs
+    uint256 public constant SLOT_DURATION = 1 hours; // 1 hour slots
+    uint256 public immutable genesisTime;
+
+    // Entry/Exit queue variables
+    uint256 public pendingEntries;
+    uint256 public pendingExits;
+    uint256 public constant MAX_CHURN_ENTRIES = 4; // Maximum entries per epoch
+    uint256 public constant MAX_CHURN_EXITS = 4; // Maximum exits per epoch
+
+    /// TODO: If i use a sortition tree to pick who submits, I can place operators in the tree with 0 stake
+    /// and they won't be selected.  then they can allocate after their entry epoch.  Apks can be queued and added after crossing an
+    /// epoch boundary or we can eat the negations of these queued keys being non signing
+
+    /// Alternatively, register assigns entry epoch to be able to deposit and add their pk to the apk
+    /// maybe need some logic to make sure the the number of accounts dequeueing and queueing don't run into an issue
+
     bytes32 public constant REGISTRATION_TYPEHASH =
         keccak256("Registration(address operator,uint256[2] signingKey,uint256 totp)");
 
@@ -44,11 +63,14 @@ contract Registry is Ownable, EIP712 {
     error OperatorLimitReached();
     error InvalidSignature();
 
+    /// TODO: Epoch based queue entry / exit.  This will enable caching bitmap -> Apk caching with solid guarentees
+    /// TODO: Include valid until so the registration will fail if they entry queue is too long relative to their intent to wait + TOTP
     constructor(
         address initialOwner
-    ) Ownable(initialOwner) EIP712("Registry", "1.0") {}
+    ) Ownable(initialOwner) EIP712("Registry", "1.0") {
+        genesisTime = block.timestamp;
+    }
 
-    /// TODO: Epoch based queue entry / exit.  This will enable caching bitmap -> Apk caching with solid guarentees
     function register(uint256[2] memory signingKey, Proof memory proof) external returns (uint8) {
         if (!_validateKey(msg.sender, signingKey, proof)) {
             revert InvalidSignature();
@@ -59,6 +81,15 @@ contract Registry is Ownable, EIP712 {
         _updateOperatorBitmap(operatorId, true);
         return operatorId;
     }
+
+    function activate() external {
+        _activate();
+    }
+
+    function deactivate() external {
+        _deactivate();
+    }
+
 
     function updateSigningKey(uint256[2] memory signingKey, Proof memory proof) external {
         uint8 operatorId = operatorIds[msg.sender];
@@ -147,10 +178,32 @@ contract Registry is Ownable, EIP712 {
         }
     }
 
+    function apk() external view returns (uint256[2] memory) {
+        return apkG1;
+    }
+
+    function getNextEntryEpoch() external view returns (uint256) {
+        return _getNextEntryEpoch();
+    }
+
+    function getNextExitEpoch() external view returns (uint256) {
+        return _getNextExitEpoch();
+    }
+
     function isRegistered(
         uint8 operatorId
     ) public view returns (bool) {
         return registeredOperators[operatorId];
+    }
+
+    function calculateRegistrationHash(
+        address operator,
+        uint256[2] memory signingKey
+    ) public view returns (bytes32) {
+        uint256 totp = block.timestamp / 3600;
+        return _hashTypedDataV4(
+            keccak256(abi.encode(REGISTRATION_TYPEHASH, operator, signingKey, totp))
+        );
     }
 
     function _getNextAvailableOperatorId() internal view returns (uint8) {
@@ -246,17 +299,23 @@ contract Registry is Ownable, EIP712 {
         emit OperatorBitmapUpdated(operatorBitmap);
     }
 
-    function calculateRegistrationHash(
-        address operator,
-        uint256[2] memory signingKey
-    ) public view returns (bytes32) {
-        uint256 totp = block.timestamp / 3600;
-        return _hashTypedDataV4(
-            keccak256(abi.encode(REGISTRATION_TYPEHASH, operator, signingKey, totp))
-        );
+
+
+    function _activate() internal {}
+
+    function _deactivate() internal {}
+
+    function _getNextEntryEpoch() internal view returns (uint256) {
+        uint256 currentSlot = EpochLib.currentSlot(genesisTime, SLOT_DURATION);
+        uint256 currentEpoch = EpochLib.slotToEpoch(currentSlot, SLOTS_PER_EPOCH);
+        uint256 epochsNeeded = (pendingEntries + MAX_CHURN_ENTRIES - 1) / MAX_CHURN_ENTRIES;
+        return currentEpoch + epochsNeeded;
     }
 
-    function apk() external view returns (uint256[2] memory) {
-        return apkG1;
+    function _getNextExitEpoch() internal view returns (uint256) {
+        uint256 currentSlot = EpochLib.currentSlot(genesisTime, SLOT_DURATION);
+        uint256 currentEpoch = EpochLib.slotToEpoch(currentSlot, SLOTS_PER_EPOCH);
+        uint256 epochsNeeded = (pendingExits + MAX_CHURN_EXITS - 1) / MAX_CHURN_EXITS;
+        return currentEpoch + epochsNeeded;
     }
 }

@@ -34,6 +34,22 @@ library EpochLib {
         return genesisTime + slot * secondsPerSlot;
     }
 
+    function timeToSlot(
+        uint256 timestamp,
+        uint256 genesisTime,
+        uint256 secondsPerSlot
+    ) internal pure returns (uint256) {
+        require(timestamp >= genesisTime, "Time is before genesis");
+        return (timestamp - genesisTime) / secondsPerSlot;
+    }
+
+    function currentSlot(
+        uint256 genesisTime,
+        uint256 secondsPerSlot
+    ) internal view returns (uint256) {
+        return timeToSlot(block.timestamp, genesisTime, secondsPerSlot);
+    }
+
     function epochStartTime(
         uint256 epoch,
         uint256 genesisTime,
