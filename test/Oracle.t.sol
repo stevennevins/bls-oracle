@@ -62,7 +62,7 @@ contract OracleTest is Test {
         // Test empty bitmap (no signers)
         uint256 emptyBitmap = 0;
         uint8[] memory nonSigners = oracle.bitmapToNonSignerIds(emptyBitmap);
-        assertEq(nonSigners.length, 10, "Empty bitmap should return all ids"); // TODO: Feels weird for this to be the operator cap
+        assertEq(nonSigners.length, NUM_OPERATORS, "Empty bitmap should return all ids"); // TODO: Feels weird for this to be the operator cap
 
         // Test bitmap with some signers
         uint256 bitmap = 0;
@@ -72,7 +72,7 @@ contract OracleTest is Test {
         nonSigners = oracle.bitmapToNonSignerIds(bitmap);
 
         // Should return all ids except 1,3,5
-        assertEq(nonSigners.length, 7, "Should return all non-signing ids");
+        assertEq(nonSigners.length, NUM_OPERATORS-3, "Should return all non-signing ids");
         /// TODO: This will change when i check the nextOperatorId in the bitmap func
 
         // Test bitmap with all signers
@@ -124,7 +124,7 @@ contract OracleTest is Test {
         }
 
         // Create signature data struct
-        Oracle.SignatureData memory sigData = Oracle.SignatureData({
+        Oracle.AggregateSignatureData memory sigData = Oracle.AggregateSignatureData({
             aggSignatureG1: aggSignature,
             aggPubkeyG2: aggPubkeyG2,
             signerBitmap: bitmap
@@ -174,7 +174,7 @@ contract OracleTest is Test {
         aggSignature[1] = 987_654_321;
 
         // Create signature data struct with tampered signature
-        Oracle.SignatureData memory sigData = Oracle.SignatureData({
+        Oracle.AggregateSignatureData memory sigData = Oracle.AggregateSignatureData({
             aggSignatureG1: aggSignature,
             aggPubkeyG2: aggPubkeyG2,
             signerBitmap: bitmap
@@ -245,7 +245,7 @@ contract OracleTest is Test {
         }
 
         // Create signature data struct
-        Oracle.SignatureData memory sigData = Oracle.SignatureData({
+        Oracle.AggregateSignatureData memory sigData = Oracle.AggregateSignatureData({
             aggSignatureG1: aggSignature,
             aggPubkeyG2: aggPubkeyG2,
             signerBitmap: bitmap

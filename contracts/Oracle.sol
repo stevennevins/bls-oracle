@@ -8,10 +8,7 @@ import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 contract Oracle is EIP712 {
     Registry public registry;
 
-    /// TODO: Implement epochs and cache
-    /// mapping(uint8 epoch => mapping (uint256 bitmap => uint256[2] apk)) apkCache;
-
-    struct SignatureData {
+    struct AggregateSignatureData {
         uint256[2] aggSignatureG1;
         uint256[4] aggPubkeyG2;
         uint256 signerBitmap;
@@ -31,16 +28,18 @@ contract Oracle is EIP712 {
         registry = Registry(_registry);
     }
 
-    function record(bytes memory response, SignatureData memory signature) external {
+    function record(bytes memory response, AggregateSignatureData memory signature) external {
         uint8[] memory operatorIds = _bitmapToNonSignerIds(signature.signerBitmap);
-        uint256[2] memory nonSignerApk = registry.getOperatorsApk(operatorIds);
         uint256[2] memory aggApk = registry.apk();
+        if (operatorIds.length > 0) {
+            uint256[2] memory nonSignerApk = registry.getOperatorsApk(operatorIds);
+            aggApk = BLS.sub(aggApk, nonSignerApk);
+        }
 
-        uint256[2] memory apk = BLS.sub(aggApk, nonSignerApk);
         bytes32 messageHash = calculateMessageHash(response);
         uint256[2] memory messagePoint = BLS.hashToPoint(bytes(DOMAIN), bytes.concat(messageHash));
 
-        uint256[12] memory apkInput = BLS.prepareApkInput(signature.aggPubkeyG2, apk);
+        uint256[12] memory apkInput = BLS.prepareApkInput(signature.aggPubkeyG2, aggApk);
         uint256[12] memory sigInput =
             BLS.prepareVerifyMessage(signature.aggSignatureG1, signature.aggPubkeyG2, messagePoint);
 
@@ -59,38 +58,11 @@ contract Oracle is EIP712 {
         emit ResponseRecorded(response);
     }
 
-    /// TOTP based?
-    function recordBatch(
-        bytes[] memory responses,
-        uint256[2][] memory signatures,
-        uint256[] memory signerBitmaps
-    ) external view {
-        /// TODO: Record data
-    }
-
     function calculateMessageHash(
         bytes memory responseData
     ) public view returns (bytes32) {
         uint256 totp = block.timestamp / 3600;
         return _hashTypedDataV4(keccak256(abi.encode(RESPONSE_TYPEHASH, responseData, totp)));
-    }
-
-    function verifySingleSignature(
-        bytes32 messageHash,
-        uint256[2] memory signature,
-        uint256[2] memory signingKeys
-    ) internal view returns (bool) {
-        /// TODO: implementation to call precompile
-        return true;
-    }
-
-    function verifyMultipleSignature(
-        bytes32[] memory messageHash,
-        uint256[2][] memory signatures,
-        uint256[2][] memory apk
-    ) internal view returns (bool) {
-        /// TODO: implementation to call precompile
-        return true;
     }
 
     function _bitmapToNonSignerIds(

@@ -3,13 +3,14 @@ ffi = true
 src = "contracts"
 out = "out"
 libs = ["lib"]
-optimizer = false
-gas_reports = ["BLSWrapper", "Registry", "Oracle"]
+optimizer = true
+optimizer-runs = 200
+gas_reports = ["Registry", "Oracle"]
 solc = "0.8.27"
 
 remappings = [
     "forge-std/=lib/forge-std/",
-    "@openzeppelin/=lib/openzeppelin-contracts/"
+    "@openzeppelin/=lib/openzeppelin-contracts/",
 ]
 
 [profile.default.fuzz]
