@@ -10,6 +10,8 @@ contract Registry is Ownable, EIP712 {
     struct Operator {
         address operator;
         uint256[2] signingKey;
+        uint256 activationEpoch;
+        uint256 deactivationEpoch;
     }
 
     struct Proof {
@@ -22,28 +24,28 @@ contract Registry is Ownable, EIP712 {
     mapping(uint8 => Operator) public operators;
     mapping(uint8 => bool) public registeredOperators;
     mapping(address => uint8) public operatorIds;
-    uint8 public nextOperatorId = 0;
+    uint8 public nextOperatorId;
 
     uint256[2] internal apkG1;
     uint256 public operatorBitmap;
 
+    mapping(uint256 epoch => uint8[5]) public entryQueue;
+    mapping(uint256 epoch => uint8[5]) public exitQueue;
+    mapping(uint256 epoch => uint256[2]) public apkChangeQueue;
+
     // Epoch variables
-    uint256 public constant SLOTS_PER_EPOCH = 24; // 1 day epochs
-    uint256 public constant SLOT_DURATION = 1 hours; // 1 hour slots
-    uint256 public immutable genesisTime;
+    uint256 public SLOTS_PER_EPOCH = 24; // 1 day epochs
+    uint256 public SLOT_DURATION = 1 hours; // 1 hour slots
+    uint256 public genesisTime;
 
     // Entry/Exit queue variables
     uint256 public pendingEntries;
     uint256 public pendingExits;
-    uint256 public constant MAX_CHURN_ENTRIES = 4; // Maximum entries per epoch
-    uint256 public constant MAX_CHURN_EXITS = 4; // Maximum exits per epoch
-
-    /// TODO: If i use a sortition tree to pick who submits, I can place operators in the tree with 0 stake
-    /// and they won't be selected.  then they can allocate after their entry epoch.  Apks can be queued and added after crossing an
-    /// epoch boundary or we can eat the negations of these queued keys being non signing
-
-    /// Alternatively, register assigns entry epoch to be able to deposit and add their pk to the apk
-    /// maybe need some logic to make sure the the number of accounts dequeueing and queueing don't run into an issue
+    uint256 public MAX_CHURN_ENTRIES = 4; // Maximum entries per epoch
+    uint256 public MAX_CHURN_EXITS = 4; // Maximum exits per epoch
+    uint256 public MAX_QUEUE_ENTRIES = 28;
+    uint256 public MAX_QUEUE_EXITS = 28;
+    uint256 public MAX_ACTIVE_OPERATORS = 200;
 
     bytes32 public constant REGISTRATION_TYPEHASH =
         keccak256("Registration(address operator,uint256[2] signingKey,uint256 totp)");
@@ -81,15 +83,6 @@ contract Registry is Ownable, EIP712 {
         _updateOperatorBitmap(operatorId, true);
         return operatorId;
     }
-
-    function activate() external {
-        _activate();
-    }
-
-    function deactivate() external {
-        _deactivate();
-    }
-
 
     function updateSigningKey(uint256[2] memory signingKey, Proof memory proof) external {
         uint8 operatorId = operatorIds[msg.sender];
@@ -298,12 +291,6 @@ contract Registry is Ownable, EIP712 {
         }
         emit OperatorBitmapUpdated(operatorBitmap);
     }
-
-
-
-    function _activate() internal {}
-
-    function _deactivate() internal {}
 
     function _getNextEntryEpoch() internal view returns (uint256) {
         uint256 currentSlot = EpochLib.currentSlot(genesisTime, SLOT_DURATION);
