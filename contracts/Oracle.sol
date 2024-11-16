@@ -28,8 +28,9 @@ contract Oracle is EIP712 {
         registry = Registry(_registry);
     }
 
-    function record(bytes memory response, AggregateSignatureData memory signature) external {
-        uint8[] memory operatorIds = _bitmapToNonSignerIds(signature.signerBitmap);
+    function record(bytes memory response, SignatureData memory signature) external {
+        uint8[] memory nonSignerIds = _bitmapToNonSignerIds(signature.signerBitmap);
+        uint256[2] memory nonSignerApk = registry.getOperatorsApk(nonSignerIds);
         uint256[2] memory aggApk = registry.apk();
         if (operatorIds.length > 0) {
             uint256[2] memory nonSignerApk = registry.getOperatorsApk(operatorIds);
@@ -68,7 +69,7 @@ contract Oracle is EIP712 {
     function _bitmapToNonSignerIds(
         uint256 bitmap
     ) internal view returns (uint8[] memory) {
-        uint256 registryBitmap = registry.operatorBitmap();
+        uint256 registryBitmap = registry.activeOperatorBitmap();
         uint8[] memory indices = new uint8[](255);
         uint8 zeroCount = 0;
         for (uint8 i = 0; i < 255; i++) {

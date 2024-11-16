@@ -28,7 +28,7 @@ contract Registry is Ownable, EIP712 {
     uint8 public nextOperatorId;
 
     uint256[2] internal apkG1;
-    uint256 public operatorBitmap;
+    uint256 internal activeOperatorBitmap;
     uint256 public lastUpdateEpoch;
 
     mapping(uint256 epoch => uint8[4]) public entryQueue;
@@ -135,7 +135,8 @@ contract Registry is Ownable, EIP712 {
 
     function getOperator(
         uint8 operatorId
-    ) external view returns (address, uint256[2] memory) {
+    ) external returns (address, uint256[2] memory) {
+        /// TODO: This should not be view and should process the queues if necessary
         if (!isRegistered(operatorId)) {
             revert NotRegistered(operatorId);
         }
@@ -143,9 +144,15 @@ contract Registry is Ownable, EIP712 {
         return (op.operator, op.signingKey);
     }
 
+    function operatorBitmap() external returns (uint256){
+        /// TODO: This should not be view and should process the queues if necessary
+        return activeOperatorBitmap;
+    }
+
     function getOperatorsApk(
         uint8[] memory ids
     ) external view returns (uint256[2] memory apk) {
+        /// TODO: This should not be view and should process the queues if necessary
         uint256 length = ids.length;
         if (length == 0) {
             return apk;
@@ -173,7 +180,8 @@ contract Registry is Ownable, EIP712 {
         }
     }
 
-    function apk() external view returns (uint256[2] memory) {
+    function apk() external returns (uint256[2] memory) {
+        /// TODO: This should not be view and should process the queues if necessary
         return apkG1;
     }
 
@@ -188,6 +196,8 @@ contract Registry is Ownable, EIP712 {
     function isRegistered(
         uint8 operatorId
     ) public view returns (bool) {
+        /// TODO: Assess the guarentees of this function
+        /// active vs registered distinction
         return registeredOperators[operatorId];
     }
 
@@ -287,11 +297,11 @@ contract Registry is Ownable, EIP712 {
 
     function _updateOperatorBitmap(uint8 operatorId, bool isAdd) internal {
         if (isAdd) {
-            operatorBitmap |= (1 << operatorId);
+            activeOperatorBitmap |= (1 << operatorId);
         } else {
-            operatorBitmap &= ~(1 << operatorId);
+            activeOperatorBitmap &= ~(1 << operatorId);
         }
-        emit OperatorBitmapUpdated(operatorBitmap);
+        emit OperatorBitmapUpdated(activeOperatorBitmap);
     }
 
     function _processQueuesIfNecessary() internal {
@@ -312,37 +322,34 @@ contract Registry is Ownable, EIP712 {
     function _processEntryQueue(
         uint256 epoch
     ) internal {
-        uint8[4] memory entries = entryQueue[epoch];
-        uint256 entriesToProcess =
-            pendingEntries < MAX_CHURN_ENTRIES ? pendingEntries : MAX_CHURN_ENTRIES;
-
-        // Only process up to MAX_CHURN_ENTRIES or available entries
-        for (uint256 i = 0; i < entriesToProcess; i++) {
-            uint8 operatorId = entries[i];
-            pendingEntries--;
-            _updateOperatorBitmap(operatorId, true);
-        }
-
-        // Apply queued APK changes for this epoch
-        uint256[2] memory epochApkChange = apkChangeQueue[epoch];
-        if (epochApkChange[0] != 0 || epochApkChange[1] != 0) {
-            _updateApk(epochApkChange, true);
-        }
-
-        delete entryQueue[epoch];
-        delete apkChangeQueue[epoch];
+        _processQueue(epoch, entryQueue, pendingEntries, MAX_CHURN_ENTRIES, true);
     }
 
     function _processExitQueue(
         uint256 epoch
     ) internal {
-        uint8[4] memory exits = exitQueue[epoch];
-        uint256 exitsToProcess = pendingExits < MAX_CHURN_EXITS ? pendingExits : MAX_CHURN_EXITS;
-        // Only process up to MAX_CHURN_EXITS or available exits
-        for (uint256 i = 0; i < exitsToProcess; i++) {
-            uint8 operatorId = exits[i];
-            pendingExits--;
-            _updateOperatorBitmap(operatorId, false);
+        _processQueue(epoch, exitQueue, pendingExits, MAX_CHURN_EXITS, false);
+    }
+
+    function _processQueue(
+        uint256 epoch,
+        mapping(uint256 => uint8[4]) storage queue,
+        uint256 queueLength,
+        uint256 maxChurn,
+        bool isEntry
+    ) internal {
+        uint8[4] memory operators = queue[epoch];
+        uint256 operatorsToProcess = queueLength < maxChurn ? queueLength : maxChurn;
+
+        // Process operators up to maxChurn limit
+        for (uint256 i = 0; i < operatorsToProcess; i++) {
+            uint8 operatorId = operators[i];
+            if (isEntry) {
+                pendingEntries--;
+            } else {
+                pendingExits--;
+            }
+            _updateOperatorBitmap(operatorId, isEntry);
         }
 
         // Apply queued APK changes for this epoch
@@ -351,7 +358,7 @@ contract Registry is Ownable, EIP712 {
             _updateApk(epochApkChange, true);
         }
 
-        delete exitQueue[epoch];
+        delete queue[epoch];
         delete apkChangeQueue[epoch];
     }
 
