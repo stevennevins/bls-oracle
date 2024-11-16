@@ -72,7 +72,7 @@ contract OracleTest is Test {
         nonSigners = oracle.bitmapToNonSignerIds(bitmap);
 
         // Should return all ids except 1,3,5
-        assertEq(nonSigners.length, NUM_OPERATORS-3, "Should return all non-signing ids");
+        assertEq(nonSigners.length, NUM_OPERATORS - 3, "Should return all non-signing ids");
         /// TODO: This will change when i check the nextOperatorId in the bitmap func
 
         // Test bitmap with all signers

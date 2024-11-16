@@ -144,7 +144,7 @@ contract Registry is Ownable, EIP712 {
         return (op.operator, op.signingKey);
     }
 
-    function operatorBitmap() external returns (uint256){
+    function operatorBitmap() external returns (uint256) {
         /// TODO: This should not be view and should process the queues if necessary
         return activeOperatorBitmap;
     }

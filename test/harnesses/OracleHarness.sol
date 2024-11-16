@@ -13,5 +13,4 @@ contract OracleHarness is Oracle {
     ) external returns (uint8[] memory) {
         return _bitmapToNonSignerIds(bitmap);
     }
-
 }
