@@ -30,7 +30,7 @@ contract Oracle is EIP712 {
 
     function record(bytes memory response, AggregateSignatureData memory signature) external {
         uint8[] memory nonSignerIds = _bitmapToNonSignerIds(signature.signerBitmap);
-        uint256[2] memory nonSignerApk = registry.getOperatorsApk(nonSignerIds);
+        // uint256[2] memory nonSignerApk = registry.getOperatorsApk(nonSignerIds);
         uint256[2] memory aggApk = registry.apk();
         if (nonSignerIds.length > 0) {
             uint256[2] memory nonSignerApk = registry.getOperatorsApk(nonSignerIds);

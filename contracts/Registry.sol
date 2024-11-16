@@ -12,7 +12,7 @@ contract Registry is Ownable, EIP712 {
         uint256[2] signingKey;
         uint256 activationEpoch;
         uint256 deactivationEpoch;
-        uint256 lastApkUpdate;
+        uint256 lastApkUpdateEpoch;
     }
 
     struct Proof {
@@ -23,6 +23,7 @@ contract Registry is Ownable, EIP712 {
     string public constant DOMAIN = "test-domain";
 
     mapping(uint8 => Operator) public operators;
+    // uint256[256][2] internal pubKeys;
     mapping(uint8 => bool) public registeredOperators;
     mapping(address => uint8) public operatorIds;
     uint8 public nextOperatorId;
@@ -286,22 +287,12 @@ contract Registry is Ownable, EIP712 {
         return pairingSuccess && callSuccess;
     }
 
-    function _updateApk(uint256[2] memory publicKeyG1, bool isAdd) internal {
-        if (isAdd) {
-            apkG1 = BLS.aggregate(apkG1, publicKeyG1);
-        } else {
-            apkG1 = BLS.sub(apkG1, publicKeyG1);
-        }
-        emit ApkUpdated(apkG1);
-    }
+    function _queueOperatorUpdate() internal {
+        /// Needs epoch that the operator becomes active
 
-    function _updateOperatorBitmap(uint8 operatorId, bool isAdd) internal {
-        if (isAdd) {
-            activeOperatorBitmap |= (1 << operatorId);
-        } else {
-            activeOperatorBitmap &= ~(1 << operatorId);
-        }
-        emit OperatorBitmapUpdated(activeOperatorBitmap);
+        /// Put their g1 key into the apkChangeQueue
+
+        /// Put their operator Id into the bitmapChangeQueue
     }
 
     function _processQueuesIfNecessary() internal {
@@ -360,6 +351,25 @@ contract Registry is Ownable, EIP712 {
 
         delete queue[epoch];
         delete apkChangeQueue[epoch];
+    }
+
+    /// These should change to be called by the queue process functions vs register, deregister, and kick
+    function _updateApk(uint256[2] memory publicKeyG1, bool isAdd) internal {
+        if (isAdd) {
+            apkG1 = BLS.aggregate(apkG1, publicKeyG1);
+        } else {
+            apkG1 = BLS.sub(apkG1, publicKeyG1);
+        }
+        emit ApkUpdated(apkG1);
+    }
+
+    function _updateOperatorBitmap(uint8 operatorId, bool isAdd) internal {
+        if (isAdd) {
+            activeOperatorBitmap |= (1 << operatorId);
+        } else {
+            activeOperatorBitmap &= ~(1 << operatorId);
+        }
+        emit OperatorBitmapUpdated(activeOperatorBitmap);
     }
 
     function _getNextEntryEpoch() internal view returns (uint256) {

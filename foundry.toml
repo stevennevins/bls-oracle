@@ -1,13 +1,13 @@
 [profile.default]
-ffi = true
 src = "contracts"
 out = "out"
 libs = ["lib"]
-optimizer = true
-optimizer-runs = 200
+optimizer = false
 gas_reports = ["Registry", "Oracle"]
 solc = "0.8.27"
-test_pattern_exclude = "BLSTestingLib.t.sol"
+ffi = true
+verbosity=2
+threads=32
 
 remappings = [
     "forge-std/=lib/forge-std/",
@@ -15,12 +15,7 @@ remappings = [
 ]
 
 [profile.default.fuzz]
-max_test_rejects = 1_000
 runs = 10
-
-[profile.ci]
-optimizer = true
-optimizer-runs = 200
 
 [profile.ci.fuzz]
 runs = 256
