@@ -12,6 +12,7 @@ contract Registry is Ownable, EIP712 {
         uint256[2] signingKey;
         uint256 activationEpoch;
         uint256 deactivationEpoch;
+        uint256 lastApkUpdate;
     }
 
     struct Proof {
@@ -28,9 +29,10 @@ contract Registry is Ownable, EIP712 {
 
     uint256[2] internal apkG1;
     uint256 public operatorBitmap;
+    uint256 public lastUpdateEpoch;
 
-    mapping(uint256 epoch => uint8[5]) public entryQueue;
-    mapping(uint256 epoch => uint8[5]) public exitQueue;
+    mapping(uint256 epoch => uint8[4]) public entryQueue;
+    mapping(uint256 epoch => uint8[4]) public exitQueue;
     mapping(uint256 epoch => uint256[2]) public apkChangeQueue;
 
     // Epoch variables
@@ -290,6 +292,67 @@ contract Registry is Ownable, EIP712 {
             operatorBitmap &= ~(1 << operatorId);
         }
         emit OperatorBitmapUpdated(operatorBitmap);
+    }
+
+    function _processQueuesIfNecessary() internal {
+        uint256 currentSlot = EpochLib.currentSlot(genesisTime, SLOT_DURATION);
+        uint256 currentEpoch = EpochLib.slotToEpoch(currentSlot, SLOTS_PER_EPOCH);
+
+        // Return early if already processed this epoch
+        if (lastUpdateEpoch >= currentEpoch) {
+            return;
+        }
+
+        _processEntryQueue(currentEpoch);
+        _processExitQueue(currentEpoch);
+
+        lastUpdateEpoch = currentEpoch;
+    }
+
+    function _processEntryQueue(
+        uint256 epoch
+    ) internal {
+        uint8[4] memory entries = entryQueue[epoch];
+        uint256 entriesToProcess =
+            pendingEntries < MAX_CHURN_ENTRIES ? pendingEntries : MAX_CHURN_ENTRIES;
+
+        // Only process up to MAX_CHURN_ENTRIES or available entries
+        for (uint256 i = 0; i < entriesToProcess; i++) {
+            uint8 operatorId = entries[i];
+            pendingEntries--;
+            _updateOperatorBitmap(operatorId, true);
+        }
+
+        // Apply queued APK changes for this epoch
+        uint256[2] memory epochApkChange = apkChangeQueue[epoch];
+        if (epochApkChange[0] != 0 || epochApkChange[1] != 0) {
+            _updateApk(epochApkChange, true);
+        }
+
+        delete entryQueue[epoch];
+        delete apkChangeQueue[epoch];
+    }
+
+    function _processExitQueue(
+        uint256 epoch
+    ) internal {
+        uint8[4] memory exits = exitQueue[epoch];
+        uint256 exitsToProcess = pendingExits < MAX_CHURN_EXITS ? pendingExits : MAX_CHURN_EXITS;
+        // Only process up to MAX_CHURN_EXITS or available exits
+        for (uint256 i = 0; i < exitsToProcess; i++) {
+            uint8 operatorId = exits[i];
+            pendingExits--;
+            _updateOperatorBitmap(operatorId, false);
+        }
+
+        // Apply queued APK changes for this epoch
+        uint256[2] memory epochApkChange = apkChangeQueue[epoch];
+        if (epochApkChange[0] != 0 || epochApkChange[1] != 0) {
+            _updateApk(epochApkChange, true);
+        }
+
+        delete exitQueue[epoch];
+        delete apkChangeQueue[epoch];
     }
 
     function _getNextEntryEpoch() internal view returns (uint256) {

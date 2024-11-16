@@ -5,6 +5,7 @@ import {Test, Vm} from "forge-std/src/Test.sol";
 import {Registry} from "../contracts/Registry.sol";
 import {BLSWallet, BLSTestingLib} from "./utils/BLSTestingLib.sol";
 import {BLS} from "./utils/BLS.sol";
+import {EpochLib} from "../contracts/EpochLib.sol";
 
 contract RegistryTest is Test {
     struct Operator {
@@ -27,6 +28,17 @@ contract RegistryTest is Test {
             operators[i].wallet = vm.createWallet(label);
             operators[i].blsWallet = BLSTestingLib.createWallet(label);
         }
+    }
+
+    function warpToNextEpoch() internal {
+        uint256 currentSlot = EpochLib.currentSlot(registry.genesisTime(), registry.SLOT_DURATION());
+        uint256 currentEpoch = EpochLib.slotToEpoch(currentSlot, registry.SLOTS_PER_EPOCH());
+        uint256 nextEpochStartSlot =
+            EpochLib.epochStartSlot(currentEpoch + 1, registry.SLOTS_PER_EPOCH());
+        uint256 nextEpochStartTime = EpochLib.slotToTime(
+            nextEpochStartSlot, registry.genesisTime(), registry.SLOT_DURATION()
+        );
+        vm.warp(nextEpochStartTime);
     }
 
     function test_Register() public {
