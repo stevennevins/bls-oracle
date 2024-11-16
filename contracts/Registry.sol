@@ -81,8 +81,8 @@ contract Registry is Ownable, EIP712 {
         }
         uint8 operatorId = _register(msg.sender);
         _updateSigningKey(operatorId, signingKey, proof.pubkeyG2);
-        _updateApk(signingKey, true);
-        _updateOperatorBitmap(operatorId, true);
+        _updateApk({publicKeyG1: signingKey, isAdd: true});
+        _updateOperatorBitmap({operatorId: operatorId, isAdd: true});
         return operatorId;
     }
 
@@ -98,8 +98,8 @@ contract Registry is Ownable, EIP712 {
 
         uint256[2] memory oldKey = operators[operatorId].signingKey;
         _updateSigningKey(operatorId, signingKey, proof.pubkeyG2);
-        _updateApk(oldKey, false);
-        _updateApk(signingKey, true);
+        _updateApk({publicKeyG1: oldKey, isAdd: false});
+        _updateApk({publicKeyG1: signingKey, isAdd: true});
     }
 
     function deregister() external {
@@ -113,8 +113,8 @@ contract Registry is Ownable, EIP712 {
         _updateSigningKey(
             operatorId, [uint256(0), uint256(0)], [uint256(0), uint256(0), uint256(0), uint256(0)]
         );
-        _updateApk(oldKey, false);
-        _updateOperatorBitmap(operatorId, false);
+        _updateApk({publicKeyG1: oldKey, isAdd: false});
+        _updateOperatorBitmap({operatorId: operatorId, isAdd: false});
     }
 
     function kick(
@@ -129,8 +129,8 @@ contract Registry is Ownable, EIP712 {
         _updateSigningKey(
             operatorId, [uint256(0), uint256(0)], [uint256(0), uint256(0), uint256(0), uint256(0)]
         );
-        _updateApk(oldKey, false);
-        _updateOperatorBitmap(operatorId, false);
+        _updateApk({publicKeyG1: oldKey, isAdd: false});
+        _updateOperatorBitmap({operatorId: operatorId, isAdd: false});
     }
 
     function getOperator(
