@@ -58,7 +58,7 @@ contract OracleTest is Test {
         }
     }
 
-    function test_Bitmap() public view {
+    function test_Bitmap() public {
         // Test empty bitmap (no signers)
         uint256 emptyBitmap = 0;
         uint8[] memory nonSigners = oracle.bitmapToNonSignerIds(emptyBitmap);
@@ -81,7 +81,7 @@ contract OracleTest is Test {
         assertEq(nonSigners.length, 0, "Full bitmap should return empty array");
     }
 
-    function test_checkNonSignerBitmap() public view {
+    function test_checkNonSignerBitmap() public {
         uint256 bitmap = 0;
         for (uint256 i = 0; i < NUM_OPERATORS; i++) {
             uint8 operatorId = registry.operatorIds(operators[i].wallet.addr);
@@ -107,7 +107,7 @@ contract OracleTest is Test {
         uint256[4] memory aggPubkeyG2;
 
         // Get bitmap from registry
-        uint256 bitmap = registry.activeOperatorBitmap();
+        uint256 bitmap = registry.operatorBitmap();
 
         for (uint256 i = 0; i < NUM_OPERATORS; i++) {
             uint256[2] memory signature =
@@ -153,7 +153,7 @@ contract OracleTest is Test {
         uint256[4] memory aggPubkeyG2;
 
         // Get bitmap from registry
-        uint256 bitmap = registry.activeOperatorBitmap();
+        uint256 bitmap = registry.operatorBitmap();
 
         for (uint256 i = 0; i < NUM_OPERATORS; i++) {
             uint256[2] memory signature =
@@ -199,7 +199,7 @@ contract OracleTest is Test {
         uint256[4] memory aggPubkeyG2;
 
         // Get bitmap from registry and remove last operator
-        uint256 bitmap = registry.activeOperatorBitmap();
+        uint256 bitmap = registry.operatorBitmap();
         uint256 lastOperatorBit = 1 << (NUM_OPERATORS - 1);
         logBitmap(bitmap);
         bitmap &= ~lastOperatorBit; // Remove last operator from bitmap

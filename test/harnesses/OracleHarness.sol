@@ -10,7 +10,7 @@ contract OracleHarness is Oracle {
 
     function exposed_bitmapToNonSignerIds(
         uint256 bitmap
-    ) external view returns (uint8[] memory) {
+    ) external returns (uint8[] memory) {
         return _bitmapToNonSignerIds(bitmap);
     }
 
