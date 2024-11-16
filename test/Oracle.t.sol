@@ -51,7 +51,9 @@ contract OracleSetup is Test {
         }
     }
 
-    function logBitmap(uint256 bitmap) internal pure {
+    function logBitmap(
+        uint256 bitmap
+    ) internal pure {
         string memory bits = "";
 
         for (uint256 i = 0; i < 256; i++) {
