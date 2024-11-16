@@ -1,12 +1,13 @@
 [profile.default]
-ffi = true
 src = "contracts"
 out = "out"
 libs = ["lib"]
-optimizer = true
-optimizer-runs = 200
+optimizer = false
 gas_reports = ["Registry", "Oracle"]
 solc = "0.8.27"
+ffi = true
+verbosity=2
+threads=32
 
 remappings = [
     "forge-std/=lib/forge-std/",
@@ -15,9 +16,6 @@ remappings = [
 
 [profile.default.fuzz]
 runs = 10
-
-[profile.ci]
-optimizer = false
 
 [profile.ci.fuzz]
 runs = 256

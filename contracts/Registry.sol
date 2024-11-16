@@ -3,12 +3,16 @@ pragma solidity ^0.8.16;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import {EpochLib} from "./EpochLib.sol";
 import {BLS} from "../test/utils/BLS.sol";
 
 contract Registry is Ownable, EIP712 {
     struct Operator {
         address operator;
         uint256[2] signingKey;
+        uint256 activationEpoch;
+        uint256 deactivationEpoch;
+        uint256 lastApkUpdateEpoch;
     }
 
     struct Proof {
@@ -19,12 +23,32 @@ contract Registry is Ownable, EIP712 {
     string public constant DOMAIN = "test-domain";
 
     mapping(uint8 => Operator) public operators;
+    // uint256[256][2] internal pubKeys;
     mapping(uint8 => bool) public registeredOperators;
     mapping(address => uint8) public operatorIds;
-    uint8 public nextOperatorId = 0;
+    uint8 public nextOperatorId;
 
     uint256[2] internal apkG1;
-    uint256 public operatorBitmap;
+    uint256 internal activeOperatorBitmap;
+    uint256 public lastUpdateEpoch;
+
+    mapping(uint256 epoch => uint8[4]) public entryQueue;
+    mapping(uint256 epoch => uint8[4]) public exitQueue;
+    mapping(uint256 epoch => uint256[2]) public apkChangeQueue;
+
+    // Epoch variables
+    uint256 public SLOTS_PER_EPOCH = 24; // 1 day epochs
+    uint256 public SLOT_DURATION = 1 hours; // 1 hour slots
+    uint256 public genesisTime;
+
+    // Entry/Exit queue variables
+    uint256 public pendingEntries;
+    uint256 public pendingExits;
+    uint256 public MAX_CHURN_ENTRIES = 4; // Maximum entries per epoch
+    uint256 public MAX_CHURN_EXITS = 4; // Maximum exits per epoch
+    uint256 public MAX_QUEUE_ENTRIES = 28;
+    uint256 public MAX_QUEUE_EXITS = 28;
+    uint256 public MAX_ACTIVE_OPERATORS = 200;
 
     bytes32 public constant REGISTRATION_TYPEHASH =
         keccak256("Registration(address operator,uint256[2] signingKey,uint256 totp)");
@@ -44,9 +68,13 @@ contract Registry is Ownable, EIP712 {
     error OperatorLimitReached();
     error InvalidSignature();
 
+    /// TODO: Epoch based queue entry / exit.  This will enable caching bitmap -> Apk caching with solid guarentees
+    /// TODO: Include valid until so the registration will fail if they entry queue is too long relative to their intent to wait + TOTP
     constructor(
         address initialOwner
-    ) Ownable(initialOwner) EIP712("Registry", "1.0") {}
+    ) Ownable(initialOwner) EIP712("Registry", "1.0") {
+        genesisTime = block.timestamp;
+    }
 
     function register(uint256[2] memory signingKey, Proof memory proof) external returns (uint8) {
         if (!_validateKey(msg.sender, signingKey, proof)) {
@@ -108,7 +136,8 @@ contract Registry is Ownable, EIP712 {
 
     function getOperator(
         uint8 operatorId
-    ) external view returns (address, uint256[2] memory) {
+    ) external returns (address, uint256[2] memory) {
+        /// TODO: This should not be view and should process the queues if necessary
         if (!isRegistered(operatorId)) {
             revert NotRegistered(operatorId);
         }
@@ -116,9 +145,15 @@ contract Registry is Ownable, EIP712 {
         return (op.operator, op.signingKey);
     }
 
+    function operatorBitmap() external returns (uint256) {
+        /// TODO: This should not be view and should process the queues if necessary
+        return activeOperatorBitmap;
+    }
+
     function getOperatorsApk(
         uint8[] memory ids
     ) external view returns (uint256[2] memory apk) {
+        /// TODO: This should not be view and should process the queues if necessary
         uint256 length = ids.length;
         if (length == 0) {
             return apk;
@@ -146,10 +181,35 @@ contract Registry is Ownable, EIP712 {
         }
     }
 
+    function apk() external returns (uint256[2] memory) {
+        /// TODO: This should not be view and should process the queues if necessary
+        return apkG1;
+    }
+
+    function getNextEntryEpoch() external view returns (uint256) {
+        return _getNextEntryEpoch();
+    }
+
+    function getNextExitEpoch() external view returns (uint256) {
+        return _getNextExitEpoch();
+    }
+
     function isRegistered(
         uint8 operatorId
     ) public view returns (bool) {
+        /// TODO: Assess the guarentees of this function
+        /// active vs registered distinction
         return registeredOperators[operatorId];
+    }
+
+    function calculateRegistrationHash(
+        address operator,
+        uint256[2] memory signingKey
+    ) public view returns (bytes32) {
+        uint256 totp = block.timestamp / 3600;
+        return _hashTypedDataV4(
+            keccak256(abi.encode(REGISTRATION_TYPEHASH, operator, signingKey, totp))
+        );
     }
 
     function _getNextAvailableOperatorId() internal view returns (uint8) {
@@ -227,6 +287,73 @@ contract Registry is Ownable, EIP712 {
         return pairingSuccess && callSuccess;
     }
 
+    function _queueOperatorUpdate() internal {
+        /// Needs epoch that the operator becomes active
+
+        /// Put their g1 key into the apkChangeQueue
+
+        /// Put their operator Id into the bitmapChangeQueue
+    }
+
+    function _processQueuesIfNecessary() internal {
+        uint256 currentSlot = EpochLib.currentSlot(genesisTime, SLOT_DURATION);
+        uint256 currentEpoch = EpochLib.slotToEpoch(currentSlot, SLOTS_PER_EPOCH);
+
+        // Return early if already processed this epoch
+        if (lastUpdateEpoch >= currentEpoch) {
+            return;
+        }
+
+        _processEntryQueue(currentEpoch);
+        _processExitQueue(currentEpoch);
+
+        lastUpdateEpoch = currentEpoch;
+    }
+
+    function _processEntryQueue(
+        uint256 epoch
+    ) internal {
+        _processQueue(epoch, entryQueue, pendingEntries, MAX_CHURN_ENTRIES, true);
+    }
+
+    function _processExitQueue(
+        uint256 epoch
+    ) internal {
+        _processQueue(epoch, exitQueue, pendingExits, MAX_CHURN_EXITS, false);
+    }
+
+    function _processQueue(
+        uint256 epoch,
+        mapping(uint256 => uint8[4]) storage queue,
+        uint256 queueLength,
+        uint256 maxChurn,
+        bool isEntry
+    ) internal {
+        uint8[4] memory operators = queue[epoch];
+        uint256 operatorsToProcess = queueLength < maxChurn ? queueLength : maxChurn;
+
+        // Process operators up to maxChurn limit
+        for (uint256 i = 0; i < operatorsToProcess; i++) {
+            uint8 operatorId = operators[i];
+            if (isEntry) {
+                pendingEntries--;
+            } else {
+                pendingExits--;
+            }
+            _updateOperatorBitmap(operatorId, isEntry);
+        }
+
+        // Apply queued APK changes for this epoch
+        uint256[2] memory epochApkChange = apkChangeQueue[epoch];
+        if (epochApkChange[0] != 0 || epochApkChange[1] != 0) {
+            _updateApk(epochApkChange, true);
+        }
+
+        delete queue[epoch];
+        delete apkChangeQueue[epoch];
+    }
+
+    /// These should change to be called by the queue process functions vs register, deregister, and kick
     function _updateApk(uint256[2] memory publicKeyG1, bool isAdd) internal {
         if (isAdd) {
             apkG1 = BLS.aggregate(apkG1, publicKeyG1);
@@ -238,24 +365,24 @@ contract Registry is Ownable, EIP712 {
 
     function _updateOperatorBitmap(uint8 operatorId, bool isAdd) internal {
         if (isAdd) {
-            operatorBitmap |= (1 << operatorId);
+            activeOperatorBitmap |= (1 << operatorId);
         } else {
-            operatorBitmap &= ~(1 << operatorId);
+            activeOperatorBitmap &= ~(1 << operatorId);
         }
-        emit OperatorBitmapUpdated(operatorBitmap);
+        emit OperatorBitmapUpdated(activeOperatorBitmap);
     }
 
-    function calculateRegistrationHash(
-        address operator,
-        uint256[2] memory signingKey
-    ) public view returns (bytes32) {
-        uint256 totp = block.timestamp / 3600;
-        return _hashTypedDataV4(
-            keccak256(abi.encode(REGISTRATION_TYPEHASH, operator, signingKey, totp))
-        );
+    function _getNextEntryEpoch() internal view returns (uint256) {
+        uint256 currentSlot = EpochLib.currentSlot(genesisTime, SLOT_DURATION);
+        uint256 currentEpoch = EpochLib.slotToEpoch(currentSlot, SLOTS_PER_EPOCH);
+        uint256 epochsNeeded = (pendingEntries + MAX_CHURN_ENTRIES - 1) / MAX_CHURN_ENTRIES;
+        return currentEpoch + epochsNeeded;
     }
 
-    function apk() external view returns (uint256[2] memory) {
-        return apkG1;
+    function _getNextExitEpoch() internal view returns (uint256) {
+        uint256 currentSlot = EpochLib.currentSlot(genesisTime, SLOT_DURATION);
+        uint256 currentEpoch = EpochLib.slotToEpoch(currentSlot, SLOTS_PER_EPOCH);
+        uint256 epochsNeeded = (pendingExits + MAX_CHURN_EXITS - 1) / MAX_CHURN_EXITS;
+        return currentEpoch + epochsNeeded;
     }
 }
