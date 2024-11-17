@@ -228,13 +228,12 @@ contract RegisterTest is RegistrySetup {
 
     function testRegisterWithInvalidSignature() public {
         // Create invalid signature by using wrong private key
-        uint256 wrongPrivateKey = 123456789;
+        uint256 wrongPrivateKey = 123_456_789;
         bytes32 messageHash = registry.calculateRegistrationHash(
             operators[0].wallet.addr, operators[0].blsWallet.publicKeyG1
         );
-        uint256[2] memory invalidSignature = BLSTestingLib.sign(
-            wrongPrivateKey, registry.DOMAIN(), messageHash
-        );
+        uint256[2] memory invalidSignature =
+            BLSTestingLib.sign(wrongPrivateKey, registry.DOMAIN(), messageHash);
         Registry.Proof memory proof = Registry.Proof({
             signature: invalidSignature,
             pubkeyG2: operators[0].blsWallet.publicKey
@@ -253,13 +252,10 @@ contract RegisterTest is RegistrySetup {
         bytes32 messageHash = registry.calculateRegistrationHash(
             operators[0].wallet.addr, operators[0].blsWallet.publicKeyG1
         );
-        uint256[2] memory signature = BLSTestingLib.sign(
-            operators[0].blsWallet.privateKey, registry.DOMAIN(), messageHash
-        );
-        Registry.Proof memory proof = Registry.Proof({
-            signature: signature,
-            pubkeyG2: operators[0].blsWallet.publicKey
-        });
+        uint256[2] memory signature =
+            BLSTestingLib.sign(operators[0].blsWallet.privateKey, registry.DOMAIN(), messageHash);
+        Registry.Proof memory proof =
+            Registry.Proof({signature: signature, pubkeyG2: operators[0].blsWallet.publicKey});
 
         vm.expectRevert(abi.encodeWithSelector(Registry.AlreadyRegistered.selector, operatorId));
         registry.register(operators[0].blsWallet.publicKeyG1, proof);
@@ -268,16 +264,11 @@ contract RegisterTest is RegistrySetup {
 
     function testRegisterWithZeroSigningKey() public {
         uint256[2] memory zeroKey = [uint256(0), uint256(0)];
-        bytes32 messageHash = registry.calculateRegistrationHash(
-            operators[0].wallet.addr, zeroKey
-        );
-        uint256[2] memory signature = BLSTestingLib.sign(
-            operators[0].blsWallet.privateKey, registry.DOMAIN(), messageHash
-        );
-        Registry.Proof memory proof = Registry.Proof({
-            signature: signature,
-            pubkeyG2: operators[0].blsWallet.publicKey
-        });
+        bytes32 messageHash = registry.calculateRegistrationHash(operators[0].wallet.addr, zeroKey);
+        uint256[2] memory signature =
+            BLSTestingLib.sign(operators[0].blsWallet.privateKey, registry.DOMAIN(), messageHash);
+        Registry.Proof memory proof =
+            Registry.Proof({signature: signature, pubkeyG2: operators[0].blsWallet.publicKey});
 
         vm.startPrank(operators[0].wallet.addr);
         vm.expectRevert(Registry.InvalidSignature.selector);
@@ -314,9 +305,7 @@ contract RegisterTest is RegistrySetup {
         (uint8 firstId,) = registerOperator(0);
         uint256 firstEpoch = registry.getActivationEpoch(firstId);
         uint256 currentEpoch = EpochLib.currentEpoch(
-            registry.genesisTime(),
-            registry.SLOT_DURATION(),
-            registry.SLOTS_PER_EPOCH()
+            registry.genesisTime(), registry.SLOT_DURATION(), registry.SLOTS_PER_EPOCH()
         );
         assertEq(firstEpoch, currentEpoch + 1);
 
@@ -427,6 +416,9 @@ contract GetOperatorTest is RegistrySetup {
 contract UpdateSigningKeyTest is RegistrySetup {
     function testUpdateSigningKey() public {
         (uint8 operatorId,) = registerOperator(0);
+
+        warpToNextEpoch();
+        registry.processQueues();
 
         updateOperatorSigningKey(0, "new-key");
 
@@ -553,8 +545,7 @@ contract GetOperatorsApkTest is RegistrySetup {
         registry.getOperatorsApk(emptyIds);
     }
 
-    function testGetOperatorsApkQueueNeedsProcessing() public {
-    }
+    function testGetOperatorsApkQueueNeedsProcessing() public {}
 
     function testGetOperatorsApkDuplicateOperators() public {
         (uint8 operatorId1,) = registerOperator(0);
@@ -608,13 +599,10 @@ contract GetOperatorsApkTest is RegistrySetup {
         bytes32 messageHash = registry.calculateRegistrationHash(
             operators[0].wallet.addr, operators[0].blsWallet.publicKeyG1
         );
-        uint256[2] memory signature = BLSTestingLib.sign(
-            operators[0].blsWallet.privateKey, registry.DOMAIN(), messageHash
-        );
-        Registry.Proof memory proof = Registry.Proof({
-            signature: signature,
-            pubkeyG2: operators[0].blsWallet.publicKey
-        });
+        uint256[2] memory signature =
+            BLSTestingLib.sign(operators[0].blsWallet.privateKey, registry.DOMAIN(), messageHash);
+        Registry.Proof memory proof =
+            Registry.Proof({signature: signature, pubkeyG2: operators[0].blsWallet.publicKey});
 
         vm.prank(operators[0].wallet.addr);
         registry.updateSigningKey(operators[0].blsWallet.publicKeyG1, proof);
@@ -628,7 +616,6 @@ contract GetOperatorsApkTest is RegistrySetup {
     }
 
     // TODO: Need to handle the case where update signing key and deregister happen in the same block and when both are queued in both orders
-
 }
 
 contract KickTest is RegistrySetup {
@@ -687,7 +674,7 @@ contract KickTest is RegistrySetup {
     function testKickClearsOperatorData() public {
         (uint8 operatorId,) = registerOperator(0);
 
-        (address initialOperator, ) = registry.getOperator(operatorId);
+        (address initialOperator,) = registry.getOperator(operatorId);
 
         vm.prank(owner.addr);
         registry.kick(operatorId);

@@ -55,6 +55,7 @@ contract Registry is Ownable, EIP712 {
 
     /// @notice Mapping of scheduled signing key updates per epoch and operator
     mapping(uint256 => mapping(uint8 => uint256[2])) public signingKeyChangeQueue;
+    mapping(uint8 => uint256) internal operatorKeyUpdateEpoch;
 
     event OperatorRegistered(uint8 indexed operatorId, address indexed operator);
     event OperatorSigningKeyUpdated(
@@ -72,6 +73,11 @@ contract Registry is Ownable, EIP712 {
     error OperatorLimitReached();
     error InvalidSignature();
     error QueueNeedsProcessing();
+    error CannotUpdateKeyDuringActivation(uint8 operatorId);
+    error CannotUpdateKeyDuringDeactivation(uint8 operatorId);
+    error KeyUpdateAlreadyQueued(uint8 operatorId);
+    error CannotDeregisterWithQueuedKeyUpdate(uint8 operatorId);
+    error CannotKickWithQueuedKeyUpdate(uint8 operatorId);
 
     constructor(
         address initialOwner
@@ -89,32 +95,60 @@ contract Registry is Ownable, EIP712 {
         }
         uint8 operatorId = _registerOperator(msg.sender);
         uint256 effectiveEpoch = _queueOperatorUpdate(operatorId, signingKey, Action.ENTRY);
-        emit OperatorSigningKeyUpdated(operatorId, effectiveEpoch, signingKey, proof.pubkeyG2); /// TODO: Consider having these updates go through the queue. asymetry
+        emit OperatorSigningKeyUpdated(operatorId, effectiveEpoch, signingKey, proof.pubkeyG2);
+        /// TODO: Consider having these updates go through the queue. asymetry
         return (operatorId, effectiveEpoch);
     }
 
     function updateSigningKey(uint256[2] memory signingKey, Proof memory proof) external {
         _processQueuesIfNecessary();
+
         uint8 operatorId = operatorIds[msg.sender];
         if (!isRegistered(operatorId)) {
             revert NotRegistered(operatorId);
         }
+
+        uint256 currentEpoch = EpochLib.currentEpoch(genesisTime, SLOT_DURATION, SLOTS_PER_EPOCH);
+        Operator storage operator = operators[operatorId];
+
+        if (operator.activationEpoch > currentEpoch) {
+            revert CannotUpdateKeyDuringActivation(operatorId);
+        }
+
+        if (operator.deactivationEpoch != 0 && operator.deactivationEpoch > currentEpoch) {
+            revert CannotUpdateKeyDuringDeactivation(operatorId);
+        }
+
+        if (operatorKeyUpdateEpoch[operatorId] > currentEpoch) {
+            revert KeyUpdateAlreadyQueued(operatorId);
+        }
+
         if (!_validateKey(msg.sender, signingKey, proof)) {
             revert InvalidSignature();
         }
+
         uint256 effectiveEpoch = _queueOperatorUpdate(operatorId, signingKey, Action.UPDATE_KEY);
         emit OperatorSigningKeyUpdated(operatorId, effectiveEpoch, signingKey, proof.pubkeyG2);
     }
 
     function deregister() external {
         _processQueuesIfNecessary();
+
         uint8 operatorId = operatorIds[msg.sender];
         if (!isRegistered(operatorId)) {
             revert NotRegistered(operatorId);
         }
+
+        uint256 currentEpoch = EpochLib.currentEpoch(genesisTime, SLOT_DURATION, SLOTS_PER_EPOCH);
+
+        if (operatorKeyUpdateEpoch[operatorId] > currentEpoch) {
+            revert CannotDeregisterWithQueuedKeyUpdate(operatorId);
+        }
+
         uint256[2] memory signingKey = operators[operatorId].signingKey;
         _deregisterOperator(operatorId);
         uint256 effectiveEpoch = _queueOperatorUpdate(operatorId, signingKey, Action.EXIT);
+
         emit OperatorSigningKeyUpdated(
             operatorId,
             effectiveEpoch,
@@ -127,18 +161,28 @@ contract Registry is Ownable, EIP712 {
         uint8 operatorId
     ) external onlyOwner {
         _processQueuesIfNecessary();
+
         if (!isRegistered(operatorId)) {
             revert NotRegistered(operatorId);
         }
+
+        uint256 currentEpoch = EpochLib.currentEpoch(genesisTime, SLOT_DURATION, SLOTS_PER_EPOCH);
+
+        if (operatorKeyUpdateEpoch[operatorId] > currentEpoch) {
+            revert CannotKickWithQueuedKeyUpdate(operatorId);
+        }
+
         uint256[2] memory oldKey = operators[operatorId].signingKey;
         _deregisterOperator(operatorId);
-        delete operators[operatorId].signingKey; // TODO: Add this to the queue logic as a new action of KICK
+        delete operators[operatorId].signingKey;
+
         emit OperatorSigningKeyUpdated(
             operatorId,
             lastUpdateEpoch,
             [uint256(0), uint256(0)],
             [uint256(0), uint256(0), uint256(0), uint256(0)]
         );
+
         _updateApk(oldKey, false);
         _updateOperatorBitmap(operatorId, false);
     }
@@ -233,7 +277,7 @@ contract Registry is Ownable, EIP712 {
     ) public view returns (bool) {
         Operator memory operator = operators[operatorId];
         uint256 currentEpoch = EpochLib.currentEpoch(genesisTime, SLOT_DURATION, SLOTS_PER_EPOCH);
-        if (operator.activationEpoch == 0 && currentEpoch == 0){
+        if (operator.activationEpoch == 0 && currentEpoch == 0) {
             return false;
         }
         if (operator.activationEpoch > currentEpoch) {
@@ -248,8 +292,12 @@ contract Registry is Ownable, EIP712 {
     function _registerOperator(
         address operator
     ) internal returns (uint8) {
-        if (operatorIds[operator] != 0 || registeredOperators[0] && operator == operators[0].operator) {
-            revert AlreadyRegistered(operatorIds[operator]); /// TODO: Cleanup redundant storage
+        if (
+            operatorIds[operator] != 0
+                || registeredOperators[0] && operator == operators[0].operator
+        ) {
+            revert AlreadyRegistered(operatorIds[operator]);
+            /// TODO: Cleanup redundant storage
         }
         uint8 operatorId = _getNextAvailableOperatorId();
         operators[operatorId] = Operator({
@@ -349,6 +397,7 @@ contract Registry is Ownable, EIP712 {
 
         // Schedule the signing key update
         signingKeyChangeQueue[effectiveEpoch][operatorId] = newSigningKey;
+        operatorKeyUpdateEpoch[operatorId] = effectiveEpoch;
 
         // Schedule the apkG1 update
         uint256[2] memory apkDelta = BLS.sub(newSigningKey, oldKey);
@@ -486,12 +535,13 @@ contract Registry is Ownable, EIP712 {
     ) internal {
         mapping(uint8 => uint256[2]) storage updates = signingKeyChangeQueue[epoch];
 
-        /// TODO: optimize not needing to loop through all the ids
         for (uint8 operatorId = 0; operatorId < nextOperatorId; operatorId++) {
             uint256[2] memory newSigningKey = updates[operatorId];
             if (newSigningKey[0] != 0 || newSigningKey[1] != 0) {
                 // Update the operator's signing key
                 operators[operatorId].signingKey = newSigningKey;
+                // Clear the queued key update epoch
+                operatorKeyUpdateEpoch[operatorId] = 0;
                 // Remove the update from the queue
                 delete updates[operatorId];
             }
