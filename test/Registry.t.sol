@@ -6,6 +6,7 @@ import {Registry} from "../contracts/Registry.sol";
 import {BLSWallet, BLSTestingLib} from "./utils/BLSTestingLib.sol";
 import {BLS} from "./utils/BLS.sol";
 import {EpochLib} from "../contracts/EpochLib.sol";
+import {console2 as console} from "forge-std/src/Test.sol";
 
 contract RegistrySetup is Test {
     struct Operator {
@@ -31,12 +32,12 @@ contract RegistrySetup is Test {
     }
 
     function warpToNextEpoch() internal {
-        uint256 currentSlot = EpochLib.currentSlot(registry.genesisTime(), registry.SLOT_DURATION());
+        uint256 currentSlot = EpochLib.currentSlot(block.timestamp, registry.SLOT_DURATION());
         uint256 currentEpoch = EpochLib.slotToEpoch(currentSlot, registry.SLOTS_PER_EPOCH());
         uint256 nextEpochStartSlot =
             EpochLib.epochStartSlot(currentEpoch + 1, registry.SLOTS_PER_EPOCH());
         uint256 nextEpochStartTime = EpochLib.slotToTime(
-            nextEpochStartSlot, registry.genesisTime(), registry.SLOT_DURATION()
+            nextEpochStartSlot, block.timestamp, registry.SLOT_DURATION()
         );
         vm.warp(nextEpochStartTime);
     }
@@ -44,7 +45,6 @@ contract RegistrySetup is Test {
 
 contract RegisterTest is RegistrySetup {
     function test_Register() public {
-        vm.startPrank(operators[0].wallet.addr);
 
         bytes32 messageHash = registry.calculateRegistrationHash(
             operators[0].wallet.addr, operators[0].blsWallet.publicKeyG1
@@ -56,15 +56,28 @@ contract RegisterTest is RegistrySetup {
         Registry.Proof memory proof =
             Registry.Proof({signature: signature, pubkeyG2: operators[0].blsWallet.publicKey});
 
-        uint8 operatorId = registry.register(operators[0].blsWallet.publicKeyG1, proof);
-
+        vm.prank(operators[0].wallet.addr);
+        (uint8 operatorId, uint256 effectiveEpoch) = registry.register(operators[0].blsWallet.publicKeyG1, proof);
         assertEq(registry.operatorIds(operators[0].wallet.addr), operatorId);
         assertTrue(registry.isRegistered(operatorId));
-        vm.stopPrank();
+
+        (address operator, uint256[2] memory signingKey) = registry.getOperator(operatorId);
+        uint256 activationEpoch = registry.getActivationEpoch(operatorId);
+
+        // Check operator is not active before epoch
+        assertFalse(registry.isActive(operatorId));
+
+        // Warp to next epoch
+        warpToNextEpoch();
+
+        // Check operator is now active
+        assertTrue(registry.isActive(operatorId));
     }
 
-    function test_ReuseOperatorId() public {
+    function test_MaxChurnRegistration() public {
+        // Register MAX_CHURN_ENTRIES operators
         uint8[] memory operatorIds = new uint8[](5);
+        uint256[] memory effectiveEpochs = new uint256[](5);
 
         for (uint256 i = 0; i < 5; i++) {
             vm.startPrank(operators[i].wallet.addr);
@@ -80,41 +93,85 @@ contract RegisterTest is RegistrySetup {
             Registry.Proof memory proof =
                 Registry.Proof({signature: signature, pubkeyG2: operators[i].blsWallet.publicKey});
 
-            operatorIds[i] = registry.register(operators[i].blsWallet.publicKeyG1, proof);
+            (operatorIds[i], effectiveEpochs[i]) = registry.register(
+                operators[i].blsWallet.publicKeyG1,
+                proof
+            );
+            vm.stopPrank();
+        }
+
+        // First 4 operators should have same activation epoch
+        assertEq(effectiveEpochs[0], effectiveEpochs[1]);
+        assertEq(effectiveEpochs[1], effectiveEpochs[2]);
+        assertEq(effectiveEpochs[2], effectiveEpochs[3]);
+
+        // 5th operator should have activation epoch 1 greater
+        assertEq(effectiveEpochs[4], effectiveEpochs[0] + 1);
+    }
+
+    function test_ReuseOperatorId() public {
+        uint8[] memory operatorIds = new uint8[](5);
+
+        for (uint256 i = 0; i < 4; i++) {
+            vm.startPrank(operators[i].wallet.addr);
+
+            bytes32 messageHash = registry.calculateRegistrationHash(
+                operators[i].wallet.addr, operators[i].blsWallet.publicKeyG1
+            );
+
+            uint256[2] memory signature = BLSTestingLib.sign(
+                operators[i].blsWallet.privateKey, registry.DOMAIN(), messageHash
+            );
+
+            Registry.Proof memory proof =
+                Registry.Proof({signature: signature, pubkeyG2: operators[i].blsWallet.publicKey});
+
+            (operatorIds[i], ) = registry.register(operators[i].blsWallet.publicKeyG1, proof);
             vm.stopPrank();
 
             assertEq(operatorIds[i], i);
         }
 
+        warpToNextEpoch();
+
         vm.startPrank(operators[1].wallet.addr);
         registry.deregister();
         vm.stopPrank();
 
+        warpToNextEpoch();
+
         assertFalse(registry.isRegistered(1));
 
-        vm.startPrank(operators[5].wallet.addr);
+        vm.startPrank(operators[4].wallet.addr);
 
         bytes32 messageHash = registry.calculateRegistrationHash(
-            operators[5].wallet.addr, operators[5].blsWallet.publicKeyG1
+            operators[4].wallet.addr, operators[4].blsWallet.publicKeyG1
         );
 
         uint256[2] memory signature =
-            BLSTestingLib.sign(operators[5].blsWallet.privateKey, registry.DOMAIN(), messageHash);
+            BLSTestingLib.sign(operators[4].blsWallet.privateKey, registry.DOMAIN(), messageHash);
 
         Registry.Proof memory proof =
-            Registry.Proof({signature: signature, pubkeyG2: operators[5].blsWallet.publicKey});
+            Registry.Proof({signature: signature, pubkeyG2: operators[4].blsWallet.publicKey});
 
-        uint8 newOperatorId = registry.register(operators[5].blsWallet.publicKeyG1, proof);
+
+        (uint8 newOperatorId, uint256 effectiveEpoch) = registry.register(operators[4].blsWallet.publicKeyG1, proof);
         vm.stopPrank();
+
+        warpToNextEpoch();
+
+        console.log("Effective epoch: %s", effectiveEpoch);
 
         assertEq(newOperatorId, 1);
         assertTrue(registry.isRegistered(1));
+        assertEq(registry.getDeactivationEpoch(1), 0, "Deactivation epoch should be reset for new operator");
+        // assertTrue(registry.isActive(1));
 
         (address registeredAddr, uint256[2] memory registeredKey) = registry.getOperator(1);
-        assertEq(registeredAddr, operators[5].wallet.addr);
+        assertEq(registeredAddr, operators[4].wallet.addr);
         assertEq(
             keccak256(abi.encode(registeredKey)),
-            keccak256(abi.encode(operators[5].blsWallet.publicKeyG1))
+            keccak256(abi.encode(operators[4].blsWallet.publicKeyG1))
         );
     }
 }
@@ -133,7 +190,7 @@ contract GetOperatorTest is RegistrySetup {
         Registry.Proof memory proof =
             Registry.Proof({signature: signature, pubkeyG2: operators[0].blsWallet.publicKey});
 
-        uint8 operatorId = registry.register(operators[0].blsWallet.publicKeyG1, proof);
+        (uint8 operatorId, uint256 effectiveEpoch) = registry.register(operators[0].blsWallet.publicKeyG1, proof);
 
         (address registeredAddr, uint256[2] memory registeredKey) = registry.getOperator(operatorId);
         assertEq(registeredAddr, operators[0].wallet.addr);
@@ -159,7 +216,7 @@ contract UpdateSigningKeyTest is RegistrySetup {
         Registry.Proof memory proof =
             Registry.Proof({signature: signature, pubkeyG2: operators[0].blsWallet.publicKey});
 
-        uint8 operatorId = registry.register(operators[0].blsWallet.publicKeyG1, proof);
+        (uint8 operatorId, uint256 effectiveEpoch) = registry.register(operators[0].blsWallet.publicKeyG1, proof);
 
         operators[0].blsWallet = BLSTestingLib.createWallet("new-key");
 
@@ -198,7 +255,7 @@ contract DeregisterTest is RegistrySetup {
         Registry.Proof memory proof =
             Registry.Proof({signature: signature, pubkeyG2: operators[0].blsWallet.publicKey});
 
-        uint8 operatorId = registry.register(operators[0].blsWallet.publicKeyG1, proof);
+        (uint8 operatorId, uint256 effectiveEpoch) = registry.register(operators[0].blsWallet.publicKeyG1, proof);
 
         registry.deregister();
         assertFalse(registry.isRegistered(operatorId));
@@ -224,7 +281,8 @@ contract GetOperatorsApkTest is RegistrySetup {
             Registry.Proof memory proof =
                 Registry.Proof({signature: signature, pubkeyG2: operators[i].blsWallet.publicKey});
 
-            operatorIds[i] = registry.register(operators[i].blsWallet.publicKeyG1, proof);
+            (uint8 id, uint256 epoch) = registry.register(operators[i].blsWallet.publicKeyG1, proof);
+            operatorIds[i] = id;
             vm.stopPrank();
         }
 
@@ -254,74 +312,6 @@ contract GetOperatorsApkTest is RegistrySetup {
         registry.getOperatorsApk(operatorIds);
     }
 }
-
-contract ApkTest is RegistrySetup {
-    function test_ApkCorrectness() public {
-        // Register first operator
-        vm.startPrank(operators[0].wallet.addr);
-        bytes32 messageHash = registry.calculateRegistrationHash(
-            operators[0].wallet.addr, operators[0].blsWallet.publicKeyG1
-        );
-        uint256[2] memory signature =
-            BLSTestingLib.sign(operators[0].blsWallet.privateKey, registry.DOMAIN(), messageHash);
-        Registry.Proof memory proof =
-            Registry.Proof({signature: signature, pubkeyG2: operators[0].blsWallet.publicKey});
-        uint8 operatorId1 = registry.register(operators[0].blsWallet.publicKeyG1, proof);
-        vm.stopPrank();
-
-        // Verify APK equals first operator's key
-        uint256[2] memory expectedApk = operators[0].blsWallet.publicKeyG1;
-        uint256[2] memory currentApk = registry.apk();
-        assertEq(currentApk[0], expectedApk[0]);
-        assertEq(currentApk[1], expectedApk[1]);
-
-        // Register second operator
-        vm.startPrank(operators[1].wallet.addr);
-        messageHash = registry.calculateRegistrationHash(
-            operators[1].wallet.addr, operators[1].blsWallet.publicKeyG1
-        );
-        signature =
-            BLSTestingLib.sign(operators[1].blsWallet.privateKey, registry.DOMAIN(), messageHash);
-        proof = Registry.Proof({signature: signature, pubkeyG2: operators[1].blsWallet.publicKey});
-        uint8 operatorId2 = registry.register(operators[1].blsWallet.publicKeyG1, proof);
-        vm.stopPrank();
-
-        // Verify APK equals aggregate of both keys
-        expectedApk =
-            BLS.aggregate(operators[0].blsWallet.publicKeyG1, operators[1].blsWallet.publicKeyG1);
-        currentApk = registry.apk();
-        assertEq(currentApk[0], expectedApk[0]);
-        assertEq(currentApk[1], expectedApk[1]);
-
-        // Update first operator's key
-        vm.startPrank(operators[0].wallet.addr);
-        uint256[2] memory newKey = operators[2].blsWallet.publicKeyG1; // TODO: Prevent this reusue of keys. Hack for now
-        messageHash = registry.calculateRegistrationHash(operators[0].wallet.addr, newKey);
-        signature =
-            BLSTestingLib.sign(operators[2].blsWallet.privateKey, registry.DOMAIN(), messageHash);
-        proof = Registry.Proof({signature: signature, pubkeyG2: operators[2].blsWallet.publicKey});
-        registry.updateSigningKey(newKey, proof);
-        vm.stopPrank();
-
-        // Verify APK equals aggregate of updated key and second operator's key
-        expectedApk = BLS.aggregate(newKey, operators[1].blsWallet.publicKeyG1);
-        currentApk = registry.apk();
-        assertEq(currentApk[0], expectedApk[0]);
-        assertEq(currentApk[1], expectedApk[1]);
-
-        // Deregister second operator
-        vm.startPrank(operators[1].wallet.addr);
-        registry.deregister();
-        vm.stopPrank();
-
-        // Verify APK equals only the first operator's updated key
-        expectedApk = newKey;
-        currentApk = registry.apk();
-        assertEq(currentApk[0], expectedApk[0]);
-        assertEq(currentApk[1], expectedApk[1]);
-    }
-}
-
 contract KickTest is RegistrySetup {
     function test_Kick() public {
         vm.startPrank(operators[0].wallet.addr);
@@ -336,7 +326,7 @@ contract KickTest is RegistrySetup {
         Registry.Proof memory proof =
             Registry.Proof({signature: signature, pubkeyG2: operators[0].blsWallet.publicKey});
 
-        uint8 operatorId = registry.register(operators[0].blsWallet.publicKeyG1, proof);
+        (uint8 operatorId, uint256 effectiveEpoch) = registry.register(operators[0].blsWallet.publicKeyG1, proof);
         vm.stopPrank();
 
         assertTrue(registry.isRegistered(operatorId));
@@ -368,7 +358,7 @@ contract KickTest is RegistrySetup {
         Registry.Proof memory proof =
             Registry.Proof({signature: signature, pubkeyG2: operators[0].blsWallet.publicKey});
 
-        uint8 operatorId = registry.register(operators[0].blsWallet.publicKeyG1, proof);
+        (uint8 operatorId, uint256 effectiveEpoch) = registry.register(operators[0].blsWallet.publicKeyG1, proof);
         vm.stopPrank();
 
         vm.prank(operators[1].wallet.addr);

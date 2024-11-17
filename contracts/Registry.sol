@@ -5,14 +5,17 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {EpochLib} from "./EpochLib.sol";
 import {BLS} from "../test/utils/BLS.sol";
+import {console2 as console} from "../lib/forge-std/src/Test.sol";
 
 contract Registry is Ownable, EIP712 {
+    enum Action {
+        ENTRY, EXIT, UPDATE_KEY
+    }
     struct Operator {
         address operator;
         uint256[2] signingKey;
         uint256 activationEpoch;
         uint256 deactivationEpoch;
-        uint256 lastApkUpdateEpoch;
     }
 
     struct Proof {
@@ -35,6 +38,8 @@ contract Registry is Ownable, EIP712 {
     mapping(uint256 epoch => uint8[4]) public entryQueue;
     mapping(uint256 epoch => uint8[4]) public exitQueue;
     mapping(uint256 epoch => uint256[2]) public apkChangeQueue;
+    /// Handle delayed operator key changes
+    mapping(uint8 operatorId => uint256[2]) public nextKey; /// Write to this and then in process Queue write it to the operator
 
     // Epoch variables
     uint256 public SLOTS_PER_EPOCH = 24; // 1 day epochs
@@ -76,18 +81,18 @@ contract Registry is Ownable, EIP712 {
         genesisTime = block.timestamp;
     }
 
-    function register(uint256[2] memory signingKey, Proof memory proof) external returns (uint8) {
+    function register(uint256[2] memory signingKey, Proof memory proof) external returns (uint8, uint256) {
+        _processQueuesIfNecessary();
         if (!_validateKey(msg.sender, signingKey, proof)) {
             revert InvalidSignature();
         }
         uint8 operatorId = _register(msg.sender);
-        _updateSigningKey(operatorId, signingKey, proof.pubkeyG2);
-        _updateApk({publicKeyG1: signingKey, isAdd: true});
-        _updateOperatorBitmap({operatorId: operatorId, isAdd: true});
-        return operatorId;
+        uint256 effectiveEpoch = _queueOperatorUpdate(operatorId, signingKey, Action.ENTRY);
+        return (operatorId, effectiveEpoch);
     }
 
     function updateSigningKey(uint256[2] memory signingKey, Proof memory proof) external {
+        _processQueuesIfNecessary();
         uint8 operatorId = operatorIds[msg.sender];
         if (!isRegistered(operatorId)) {
             revert NotRegistered(operatorId);
@@ -97,13 +102,11 @@ contract Registry is Ownable, EIP712 {
             revert InvalidSignature();
         }
 
-        uint256[2] memory oldKey = operators[operatorId].signingKey;
-        _updateSigningKey(operatorId, signingKey, proof.pubkeyG2);
-        _updateApk({publicKeyG1: oldKey, isAdd: false});
-        _updateApk({publicKeyG1: signingKey, isAdd: true});
+        _queueOperatorUpdate(operatorId, signingKey, Action.UPDATE_KEY); // TODO: Prevent signing key updates after queue. Simple way might be to prevent if in Activation/Deactivation Queues
     }
 
     function deregister() external {
+        _processQueuesIfNecessary();
         uint8 operatorId = operatorIds[msg.sender];
         if (!isRegistered(operatorId)) {
             revert NotRegistered(operatorId);
@@ -111,16 +114,14 @@ contract Registry is Ownable, EIP712 {
 
         uint256[2] memory oldKey = operators[operatorId].signingKey;
         _deregister(operatorId);
-        _updateSigningKey(
-            operatorId, [uint256(0), uint256(0)], [uint256(0), uint256(0), uint256(0), uint256(0)]
-        );
-        _updateApk({publicKeyG1: oldKey, isAdd: false});
-        _updateOperatorBitmap({operatorId: operatorId, isAdd: false});
+        uint256[2] memory signingKey = operators[operatorId].signingKey;
+        _queueOperatorUpdate(operatorId, signingKey, Action.EXIT); // TODO: Prevent signing key updates after queue
     }
 
     function kick(
         uint8 operatorId
     ) external onlyOwner {
+        _processQueuesIfNecessary();
         if (!isRegistered(operatorId)) {
             revert NotRegistered(operatorId);
         }
@@ -152,7 +153,7 @@ contract Registry is Ownable, EIP712 {
 
     function getOperatorsApk(
         uint8[] memory ids
-    ) external view returns (uint256[2] memory apk) {
+    ) external returns (uint256[2] memory apk) {
         /// TODO: This should not be view and should process the queues if necessary
         uint256 length = ids.length;
         if (length == 0) {
@@ -212,6 +213,12 @@ contract Registry is Ownable, EIP712 {
         );
     }
 
+    /// @notice Process any pending entry and exit queues for the current epoch
+    /// @dev This function can be called by anyone to process the queues
+    function processQueues() external {
+        _processQueuesIfNecessary();
+    }
+
     function _getNextAvailableOperatorId() internal view returns (uint8) {
         if (nextOperatorId >= 256) {
             revert OperatorLimitReached();
@@ -259,8 +266,8 @@ contract Registry is Ownable, EIP712 {
         uint8 operatorId
     ) internal {
         address operator = operators[operatorId].operator;
-        delete operatorIds[operator];
-        delete operators[operatorId];
+        // delete operatorIds[operator];
+        // delete operators[operatorId];
         delete registeredOperators[operatorId];
 
         emit OperatorDeregistered(operatorId);
@@ -287,12 +294,36 @@ contract Registry is Ownable, EIP712 {
         return pairingSuccess && callSuccess;
     }
 
-    function _queueOperatorUpdate() internal {
-        /// Needs epoch that the operator becomes active
 
-        /// Put their g1 key into the apkChangeQueue
 
-        /// Put their operator Id into the bitmapChangeQueue
+    function _queueOperatorUpdate(
+        uint8 operatorId,
+        uint256[2] memory signingKey,
+        Action reason
+    ) internal returns (uint256) {
+        uint256 effectiveEpoch;
+        if (reason == Action.ENTRY) {
+            effectiveEpoch = _addToEntryQueue(operatorId);
+            operators[operatorId].activationEpoch = effectiveEpoch;
+            operators[operatorId].signingKey = signingKey;
+            uint256[2] memory apk = apkChangeQueue[effectiveEpoch];
+            apkChangeQueue[effectiveEpoch] = BLS.aggregate(apk, signingKey);
+        } else if (reason == Action.EXIT) {
+            effectiveEpoch = _addToExitQueue(operatorId);
+            operators[operatorId].deactivationEpoch = effectiveEpoch;
+            uint256[2] memory apk = apkChangeQueue[effectiveEpoch];
+            apkChangeQueue[effectiveEpoch] = BLS.sub(apk, signingKey);
+        } else if (reason == Action.UPDATE_KEY){
+            uint256 currentSlot = EpochLib.currentSlot(genesisTime, SLOT_DURATION);
+            effectiveEpoch = EpochLib.slotToEpoch(currentSlot, SLOTS_PER_EPOCH) + 1; // Takes effect next epoch
+            uint256[2] memory apk = apkChangeQueue[effectiveEpoch];
+            uint256[2] memory oldKey = operators[operatorId].signingKey;
+            uint256[2] memory delta = BLS.sub(signingKey, oldKey);
+            apkChangeQueue[effectiveEpoch] = BLS.aggregate(apk, delta);
+        } else {
+            revert("Invalid path");
+        }
+        return effectiveEpoch;
     }
 
     function _processQueuesIfNecessary() internal {
@@ -308,6 +339,51 @@ contract Registry is Ownable, EIP712 {
         _processExitQueue(currentEpoch);
 
         lastUpdateEpoch = currentEpoch;
+    }
+
+    function _addToQueue(
+        uint256 epoch,
+        mapping(uint256 => uint8[4]) storage queue,
+        uint8 operatorId,
+        uint256 queueSize,
+        uint256 maxEpochChurn, // paramaterizing this since they may differ
+        bool isEntry
+    ) internal {
+        // Get current queue for this epoch
+        uint8[4] storage epochQueue = queue[epoch];
+
+        // Calculate slot index (0-3) based on queue size
+        uint256 slot = queueSize % maxEpochChurn;
+
+        console.log("Adding to queue - epoch: %s, slot: %s", epoch, slot);
+        // Add operator to queue
+        epochQueue[slot] = operatorId;
+        queue[epoch] = epochQueue;
+
+        // Update pending count
+        if (isEntry) {
+            pendingEntries++;
+        } else {
+            pendingExits++;
+        }
+    }
+
+    function _addToEntryQueue(uint8 operatorId) internal returns (uint256){
+        uint256 activationEpoch = _getNextEntryEpoch();
+        console.log("OperatorId: %s", operatorId);
+        console.log("Pending entries: %s", pendingEntries);
+        console.log("Activation epoch: %s", activationEpoch);
+        _addToQueue(activationEpoch, entryQueue, operatorId, pendingEntries, MAX_CHURN_ENTRIES, true);
+        return activationEpoch;
+    }
+
+    function _addToExitQueue(
+        uint8 operatorId
+    ) internal returns (uint256) {
+        uint256 deactivationEpoch = _getNextExitEpoch();
+        _addToQueue(deactivationEpoch, entryQueue, operatorId, pendingEntries, MAX_CHURN_EXITS, false);
+        return deactivationEpoch;
+
     }
 
     function _processEntryQueue(
@@ -326,7 +402,7 @@ contract Registry is Ownable, EIP712 {
         uint256 epoch,
         mapping(uint256 => uint8[4]) storage queue,
         uint256 queueLength,
-        uint256 maxChurn,
+        uint256 maxChurn, // paramaterizing this since they may differ
         bool isEntry
     ) internal {
         uint8[4] memory operators = queue[epoch];
@@ -339,6 +415,7 @@ contract Registry is Ownable, EIP712 {
                 pendingEntries--;
             } else {
                 pendingExits--;
+                delete operators[operatorId];
             }
             _updateOperatorBitmap(operatorId, isEntry);
         }
@@ -375,14 +452,56 @@ contract Registry is Ownable, EIP712 {
     function _getNextEntryEpoch() internal view returns (uint256) {
         uint256 currentSlot = EpochLib.currentSlot(genesisTime, SLOT_DURATION);
         uint256 currentEpoch = EpochLib.slotToEpoch(currentSlot, SLOTS_PER_EPOCH);
-        uint256 epochsNeeded = (pendingEntries + MAX_CHURN_ENTRIES - 1) / MAX_CHURN_ENTRIES;
+        uint256 epochsNeeded = pendingEntries / MAX_CHURN_ENTRIES + 1;
         return currentEpoch + epochsNeeded;
     }
 
     function _getNextExitEpoch() internal view returns (uint256) {
         uint256 currentSlot = EpochLib.currentSlot(genesisTime, SLOT_DURATION);
         uint256 currentEpoch = EpochLib.slotToEpoch(currentSlot, SLOTS_PER_EPOCH);
-        uint256 epochsNeeded = (pendingExits + MAX_CHURN_EXITS - 1) / MAX_CHURN_EXITS;
+        uint256 epochsNeeded = pendingExits / MAX_CHURN_EXITS + 1;
         return currentEpoch + epochsNeeded;
     }
+
+    /// @notice Returns the epoch at which an operator was activated
+    /// @param operatorId The ID of the operator
+    /// @return The epoch at which the operator was activated, or 0 if never activated
+    function getActivationEpoch(uint8 operatorId) external view returns (uint256) {
+        return operators[operatorId].activationEpoch;
+    }
+
+    /// @notice Returns the epoch at which an operator was deactivated
+    /// @param operatorId The ID of the operator
+    /// @return The epoch at which the operator was deactivated, or 0 if never deactivated
+    function getDeactivationEpoch(uint8 operatorId) external view returns (uint256) {
+        return operators[operatorId].deactivationEpoch;
+    }
+
+    /// @notice Returns whether an operator is active based on their registration status and epochs
+    /// @param operatorId The ID of the operator
+    /// @return True if the operator is active, false otherwise
+    function isActive(uint8 operatorId) external view returns (bool) {
+        Operator memory operator = operators[operatorId];
+
+        // Not registered
+        if (!isRegistered(operatorId)) {
+            return false;
+        }
+
+        uint256 currentSlot = EpochLib.currentSlot(genesisTime, SLOT_DURATION);
+        uint256 currentEpoch = EpochLib.slotToEpoch(currentSlot, SLOTS_PER_EPOCH);
+
+        // Check if after activation epoch
+        if (operator.activationEpoch > currentEpoch) {
+            return false;
+        }
+
+        // Check if before deactivation epoch (if set)
+        if (operator.deactivationEpoch != 0 && operator.deactivationEpoch <= currentEpoch) {
+            return false;
+        }
+
+        return true;
+    }
+
 }
