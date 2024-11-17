@@ -50,6 +50,15 @@ library EpochLib {
         return timeToSlot(block.timestamp, genesisTime, secondsPerSlot);
     }
 
+    function currentEpoch(
+        uint256 genesisTime,
+        uint256 secondsPerSlot,
+        uint256 slotsPerEpoch
+    ) internal view returns (uint256) {
+        uint256 slot = currentSlot(genesisTime, secondsPerSlot);
+        return slotToEpoch(slot, slotsPerEpoch);
+    }
+
     function epochStartTime(
         uint256 epoch,
         uint256 genesisTime,
