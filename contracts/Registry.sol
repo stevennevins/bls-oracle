@@ -367,11 +367,8 @@ contract Registry is Ownable, EIP712 {
 
     function _processQueuesIfNecessary() internal {
         if (_needsQueueProcessing()) {
-            uint256 currentEpoch = EpochLib.currentEpoch(
-                genesisTime,
-                SLOT_DURATION,
-                SLOTS_PER_EPOCH
-            );
+            uint256 currentEpoch =
+                EpochLib.currentEpoch(genesisTime, SLOT_DURATION, SLOTS_PER_EPOCH);
 
             for (uint256 epoch = lastUpdateEpoch + 1; epoch <= currentEpoch; epoch++) {
                 _processQueue(entryQueue, pendingEntries, MAX_CHURN_ENTRIES, epoch, true);
@@ -471,7 +468,9 @@ contract Registry is Ownable, EIP712 {
         return currentEpoch + epochsNeeded;
     }
 
-    function _processSigningKeyUpdates(uint256 epoch) internal {
+    function _processSigningKeyUpdates(
+        uint256 epoch
+    ) internal {
         mapping(uint8 => uint256[2]) storage updates = signingKeyChangeQueue[epoch];
 
         for (uint8 operatorId = 0; operatorId < nextOperatorId; operatorId++) {
@@ -482,9 +481,7 @@ contract Registry is Ownable, EIP712 {
 
                 // Emit event for signing key update
                 emit OperatorSigningKeyUpdated(
-                    operatorId,
-                    newSigningKey,
-                    [uint256(0), uint256(0), uint256(0), uint256(0)]
+                    operatorId, newSigningKey, [uint256(0), uint256(0), uint256(0), uint256(0)]
                 );
 
                 // Remove the update from the queue
