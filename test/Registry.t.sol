@@ -201,26 +201,21 @@ contract RegisterTest is RegistrySetup {
         (uint8 operatorId2,) = registerOperator(1);
         assertEq(operatorId2, 1);
 
-        // Process registration
         warpToNextEpoch();
         registry.processQueues();
 
-        // Deregister second operator
         deregisterOperator(1);
         warpToNextEpoch();
         registry.processQueues();
 
         assertFalse(registry.isRegistered(1));
 
-        // Register new operator and verify it reuses ID 1
         (uint8 newOperatorId,) = registerOperator(2);
         assertEq(newOperatorId, 1);
 
-        // Process registration
         warpToNextEpoch();
         registry.processQueues();
 
-        // Verify new operator details
         assertTrue(registry.isRegistered(1));
         (address registeredAddr,) = registry.getOperator(1);
         assertEq(registeredAddr, operators[2].wallet.addr);
@@ -393,23 +388,25 @@ contract GetOperatorTest is RegistrySetup {
     }
 
     function testGetOperatorRevertsForNonExistentId() public {
-        // Test getting operator with ID that has never been registered
+        uint8 nonExistentId = 123;
+        vm.expectRevert(abi.encodeWithSelector(Registry.NotRegistered.selector, nonExistentId));
+        registry.getOperator(nonExistentId);
     }
 
     function testGetOperatorRevertsForInactiveId() public {
-        // Test getting operator after their id is inactive
-    }
+        (uint8 operatorId,) = registerOperator(0);
+        warpToNextEpoch();
+        registry.processQueues();
+        assertTrue(registry.isActive(operatorId));
 
-    function testGetOperatorRevertsWhenQueueNeedsProcessing() public {
-        // Test getting operator when queue needs processing
-    }
+        deregisterOperator(0);
+        warpToNextEpoch();
+        registry.processQueues();
 
-    function testGetOperatorForOperatorWithPendingEntry() public {
-        // Test getting operator info while they are in entry queue but not yet active
-    }
+        assertFalse(registry.isActive(operatorId));
 
-    function testGetOperatorForOperatorWithPendingExit() public {
-        // Test getting operator info while they are in exit queue but still active
+        vm.expectRevert(abi.encodeWithSelector(Registry.NotRegistered.selector, operatorId));
+        registry.getOperator(operatorId);
     }
 }
 
@@ -433,35 +430,173 @@ contract UpdateSigningKeyTest is RegistrySetup {
     }
 
     function testUpdateSigningKeyNotRegistered() public {
-        // Test updating signing key for an unregistered operator
+        uint256[2] memory signingKey = operators[0].blsWallet.publicKeyG1;
+        bytes32 messageHash =
+            registry.calculateRegistrationHash(operators[0].wallet.addr, signingKey);
+
+        uint256[2] memory signature =
+            BLSTestingLib.sign(operators[0].blsWallet.privateKey, registry.DOMAIN(), messageHash);
+
+        Registry.Proof memory proof =
+            Registry.Proof({signature: signature, pubkeyG2: operators[0].blsWallet.publicKey});
+
+        vm.startPrank(operators[0].wallet.addr);
+        vm.expectRevert(abi.encodeWithSelector(Registry.NotRegistered.selector, 0));
+        registry.updateSigningKey(signingKey, proof);
+        vm.stopPrank();
     }
 
     function testUpdateSigningKeyInvalidSignature() public {
-        // Test updating signing key with invalid BLS signature
-    }
+        (uint8 operatorId,) = registerOperator(0);
 
-    function testUpdateSigningKeyQueueProcessing() public {
-        // Test that key update is properly queued and processed at next epoch
+        warpToNextEpoch();
+        registry.processQueues();
+
+        uint256[2] memory signingKey = operators[0].blsWallet.publicKeyG1;
+        bytes32 messageHash =
+            registry.calculateRegistrationHash(operators[0].wallet.addr, signingKey);
+
+        // Sign with wrong private key to generate invalid signature
+        uint256[2] memory invalidSignature =
+            BLSTestingLib.sign(operators[1].blsWallet.privateKey, registry.DOMAIN(), messageHash);
+
+        Registry.Proof memory proof = Registry.Proof({
+            signature: invalidSignature,
+            pubkeyG2: operators[0].blsWallet.publicKey
+        });
+
+        vm.startPrank(operators[0].wallet.addr);
+        vm.expectRevert(abi.encodeWithSelector(Registry.InvalidSignature.selector));
+        registry.updateSigningKey(signingKey, proof);
+        vm.stopPrank();
     }
 
     function testUpdateSigningKeyUpdatesApk() public {
-        // Test that APK is properly updated with new key after processing
+        (uint8 operatorId,) = registerOperator(0);
+        warpToNextEpoch();
+        registry.processQueues();
+
+        uint256[2] memory initialApk = registry.apk();
+
+        string memory newKeyLabel = "new-key";
+        updateOperatorSigningKey(0, newKeyLabel);
+
+        warpToNextEpoch();
+        registry.processQueues();
+
+        uint256[2] memory finalApk = registry.apk();
+
+        assertFalse(
+            keccak256(abi.encode(initialApk)) == keccak256(abi.encode(finalApk)),
+            "APK should change after key update"
+        );
     }
 
     function testUpdateSigningKeyMultipleUpdatesInSameEpoch() public {
-        // Test behavior when multiple key updates are queued in same epoch
+        (uint8 operatorId,) = registerOperator(0);
+
+        warpToNextEpoch();
+        registry.processQueues();
+
+        updateOperatorSigningKey(0, "new-key-1");
+
+        operators[0].blsWallet = BLSTestingLib.createWallet("new-key-2");
+
+        bytes32 messageHash = registry.calculateRegistrationHash(
+            operators[0].wallet.addr, operators[0].blsWallet.publicKeyG1
+        );
+
+        uint256[2] memory signature =
+            BLSTestingLib.sign(operators[0].blsWallet.privateKey, registry.DOMAIN(), messageHash);
+
+        Registry.Proof memory proof =
+            Registry.Proof({signature: signature, pubkeyG2: operators[0].blsWallet.publicKey});
+
+        vm.startPrank(operators[0].wallet.addr);
+        vm.expectRevert(
+            abi.encodeWithSelector(Registry.KeyUpdateAlreadyQueued.selector, operatorId)
+        );
+        registry.updateSigningKey(operators[0].blsWallet.publicKeyG1, proof);
+        vm.stopPrank();
+
+        warpToNextEpoch();
+        registry.processQueues();
+
+        updateOperatorSigningKey(0, "new-key-2");
+
+        warpToNextEpoch();
+        registry.processQueues();
+
+        (, uint256[2] memory finalKey) = registry.getOperator(operatorId);
+        assertEq(
+            keccak256(abi.encode(finalKey)),
+            keccak256(abi.encode(operators[0].blsWallet.publicKeyG1))
+        );
     }
 
     function testUpdateSigningKeyPendingExit() public {
-        // Test updating key for operator with pending exit
-    }
+        (uint8 operatorId,) = registerOperator(0);
 
-    function testUpdateSigningKeyZeroKey() public {
-        // Test updating to zero signing key
+        warpToNextEpoch();
+        registry.processQueues();
+
+        vm.startPrank(operators[0].wallet.addr);
+        registry.deregister();
+        vm.stopPrank();
+
+        operators[0].blsWallet = BLSTestingLib.createWallet("new-key");
+
+        bytes32 messageHash = registry.calculateRegistrationHash(
+            operators[0].wallet.addr, operators[0].blsWallet.publicKeyG1
+        );
+
+        uint256[2] memory signature =
+            BLSTestingLib.sign(operators[0].blsWallet.privateKey, registry.DOMAIN(), messageHash);
+
+        Registry.Proof memory proof =
+            Registry.Proof({signature: signature, pubkeyG2: operators[0].blsWallet.publicKey});
+
+        vm.startPrank(operators[0].wallet.addr);
+        vm.expectRevert(
+            abi.encodeWithSelector(Registry.CannotUpdateKeyDuringDeactivation.selector, operatorId)
+        );
+        registry.updateSigningKey(operators[0].blsWallet.publicKeyG1, proof);
+        vm.stopPrank();
     }
 
     function testUpdateSigningKeyDuplicateKey() public {
-        // Test updating to a signing key already in use by another operator
+        /// TODO: We want to prevent duplicate signing keys
+        (uint8 operatorId1,) = registerOperator(0);
+        warpToNextEpoch();
+        registry.processQueues();
+
+        (uint8 operatorId2,) = registerOperator(1);
+        warpToNextEpoch();
+        registry.processQueues();
+
+        operators[1].blsWallet = operators[0].blsWallet;
+
+        bytes32 messageHash = registry.calculateRegistrationHash(
+            operators[1].wallet.addr, operators[1].blsWallet.publicKeyG1
+        );
+
+        uint256[2] memory signature =
+            BLSTestingLib.sign(operators[1].blsWallet.privateKey, registry.DOMAIN(), messageHash);
+
+        Registry.Proof memory proof =
+            Registry.Proof({signature: signature, pubkeyG2: operators[1].blsWallet.publicKey});
+
+        vm.startPrank(operators[1].wallet.addr);
+        registry.updateSigningKey(operators[1].blsWallet.publicKeyG1, proof);
+        vm.stopPrank();
+
+        warpToNextEpoch();
+        registry.processQueues();
+
+        (, uint256[2] memory key1) = registry.getOperator(operatorId1);
+        (, uint256[2] memory key2) = registry.getOperator(operatorId2);
+
+        assertEq(keccak256(abi.encode(key1)), keccak256(abi.encode(key2)));
     }
 }
 
@@ -475,31 +610,116 @@ contract DeregisterTest is RegistrySetup {
     }
 
     function testDeregisterNotRegistered() public {
-        // Test deregistering an operator that is not registered
+        vm.expectRevert(abi.encodeWithSelector(Registry.NotRegistered.selector, 0));
+        vm.prank(address(1));
+        registry.deregister();
     }
 
     function testDeregisterQueueProcessing() public {
-        // Test that deregistering properly queues the exit and processes it
+        (uint8 operatorId,) = registerOperator(0);
+
+        warpToNextEpoch();
+        registry.processQueues();
+
+        assertTrue(registry.isRegistered(operatorId));
+        assertTrue(registry.isActive(operatorId));
+
+        deregisterOperator(0);
+
+        assertFalse(registry.isRegistered(operatorId));
+        assertTrue(registry.isActive(operatorId));
+        assertEq(registry.pendingExits(), 1);
+
+        warpToNextEpoch();
+        registry.processQueues();
+
+        assertFalse(registry.isRegistered(operatorId));
+        assertFalse(registry.isActive(operatorId));
+        assertEq(registry.pendingExits(), 0);
     }
 
     function testDeregisterUpdatesApk() public {
-        // Test that APK is properly updated after deregistration is processed
+        (uint8 operatorId,) = registerOperator(0);
+
+        warpToNextEpoch();
+        registry.processQueues();
+
+        uint256[2] memory initialApk = registry.apk();
+
+        (, uint256[2] memory signingKey) = registry.getOperator(operatorId);
+
+        deregisterOperator(0);
+
+        warpToNextEpoch();
+        registry.processQueues();
+
+        uint256[2] memory expectedApk = BLS.sub(initialApk, signingKey);
+        uint256[2] memory finalApk = registry.apk();
+
+        assertEq(finalApk[0], expectedApk[0]);
+        assertEq(finalApk[1], expectedApk[1]);
     }
 
     function testDeregisterOperatorBitmap() public {
-        // Test that operator bitmap is properly updated after deregistration is processed
-    }
+        (uint8 operatorId,) = registerOperator(0);
 
-    function testDeregisterReusableId() public {
-        // Test that deregistered operator ID can be reused for new registration
+        warpToNextEpoch();
+        registry.processQueues();
+
+        uint256 initialBitmap = registry.operatorBitmap();
+        assertTrue(initialBitmap & (1 << operatorId) != 0);
+
+        deregisterOperator(0);
+
+        assertEq(registry.operatorBitmap(), initialBitmap);
+
+        warpToNextEpoch();
+        registry.processQueues();
+
+        uint256 finalBitmap = registry.operatorBitmap();
+        assertTrue(finalBitmap & (1 << operatorId) == 0);
     }
 
     function testDeregisterPendingExits() public {
-        // Test that pendingExits counter is properly incremented
+        for (uint256 i = 0; i < 3; i++) {
+            registerOperator(i);
+        }
+
+        assertEq(registry.pendingExits(), 0);
+
+        deregisterOperator(0);
+        assertEq(registry.pendingExits(), 1);
+
+        deregisterOperator(1);
+        assertEq(registry.pendingExits(), 2);
+
+        warpToNextEpoch();
+        registry.processQueues();
+        assertEq(registry.pendingExits(), 0);
     }
 
     function testDeregisterEffectiveEpoch() public {
-        // Test that deregistration takes effect at correct epoch based on churn limit
+        for (uint256 i = 0; i < registry.MAX_CHURN_EXITS() + 1; i++) {
+            registerOperator(i);
+        }
+
+        warpToNextEpoch();
+        registry.processQueues();
+
+        uint256 currentEpoch = getCurrentEpoch();
+
+        for (uint256 i = 0; i < registry.MAX_CHURN_EXITS(); i++) {
+            deregisterOperator(i);
+        }
+
+        // First MAX_CHURN_EXITS operators should be scheduled for next epoch
+        for (uint256 i = 0; i < registry.MAX_CHURN_EXITS(); i++) {
+            assertEq(registry.getDeactivationEpoch(uint8(i)), currentEpoch + 1);
+        }
+
+        // Additional deregistration should be scheduled for epoch after
+        deregisterOperator(registry.MAX_CHURN_EXITS());
+        assertEq(registry.getDeactivationEpoch(uint8(registry.MAX_CHURN_EXITS())), currentEpoch + 2);
     }
 }
 

@@ -104,9 +104,6 @@ contract Registry is Ownable, EIP712 {
         _processQueuesIfNecessary();
 
         uint8 operatorId = operatorIds[msg.sender];
-        if (!isRegistered(operatorId)) {
-            revert NotRegistered(operatorId);
-        }
 
         uint256 currentEpoch = EpochLib.currentEpoch(genesisTime, SLOT_DURATION, SLOTS_PER_EPOCH);
         Operator storage operator = operators[operatorId];
@@ -117,6 +114,10 @@ contract Registry is Ownable, EIP712 {
 
         if (operator.deactivationEpoch != 0 && operator.deactivationEpoch > currentEpoch) {
             revert CannotUpdateKeyDuringDeactivation(operatorId);
+        }
+
+        if (!isRegistered(operatorId)) {
+            revert NotRegistered(operatorId);
         }
 
         if (operatorKeyUpdateEpoch[operatorId] > currentEpoch) {
@@ -136,6 +137,7 @@ contract Registry is Ownable, EIP712 {
 
         uint8 operatorId = operatorIds[msg.sender];
         if (!isRegistered(operatorId)) {
+            /// TODO: Should have this be the address since an unregistered operator will have id 0
             revert NotRegistered(operatorId);
         }
 

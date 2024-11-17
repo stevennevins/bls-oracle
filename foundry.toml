@@ -7,8 +7,7 @@ gas_reports = ["Registry", "Oracle"]
 solc = "0.8.27"
 ffi = true
 verbosity=3
-threads=32
-start_time = 1704067200 # Jan 1, 2024 00:00:00 UTC
+threads=16
 
 remappings = [
     "forge-std/=lib/forge-std/",
