@@ -58,7 +58,7 @@ contract Registry is Ownable, EIP712 {
 
     event OperatorRegistered(uint8 indexed operatorId, address indexed operator);
     event OperatorSigningKeyUpdated(
-        uint8 indexed operatorId, uint256[2] signingKey, uint256[4] pubkeyG2
+        uint8 indexed operatorId, uint256 effectiveEpoch, uint256[2] signingKey, uint256[4] pubkeyG2
     );
     event OperatorDeregistered(uint8 indexed operatorId);
     event ApkUpdated(uint256[2] newApk);
@@ -88,6 +88,7 @@ contract Registry is Ownable, EIP712 {
         }
         uint8 operatorId = _registerOperator(msg.sender);
         uint256 effectiveEpoch = _queueOperatorUpdate(operatorId, signingKey, Action.ENTRY);
+        emit OperatorSigningKeyUpdated(operatorId, effectiveEpoch, signingKey, proof.pubkeyG2);
         return (operatorId, effectiveEpoch);
     }
 
@@ -100,7 +101,8 @@ contract Registry is Ownable, EIP712 {
         if (!_validateKey(msg.sender, signingKey, proof)) {
             revert InvalidSignature();
         }
-        _queueOperatorUpdate(operatorId, signingKey, Action.UPDATE_KEY);
+        uint256 effectiveEpoch = _queueOperatorUpdate(operatorId, signingKey, Action.UPDATE_KEY);
+        emit OperatorSigningKeyUpdated(operatorId, effectiveEpoch, signingKey, proof.pubkeyG2);
     }
 
     function deregister() external {
@@ -111,7 +113,13 @@ contract Registry is Ownable, EIP712 {
         }
         uint256[2] memory signingKey = operators[operatorId].signingKey;
         _deregisterOperator(operatorId);
-        _queueOperatorUpdate(operatorId, signingKey, Action.EXIT);
+        uint256 effectiveEpoch = _queueOperatorUpdate(operatorId, signingKey, Action.EXIT);
+        emit OperatorSigningKeyUpdated(
+            operatorId,
+            effectiveEpoch,
+            [uint256(0), uint256(0)],
+            [uint256(0), uint256(0), uint256(0), uint256(0)]
+        );
     }
 
     function kick(
@@ -123,8 +131,12 @@ contract Registry is Ownable, EIP712 {
         }
         uint256[2] memory oldKey = operators[operatorId].signingKey;
         _deregisterOperator(operatorId);
-        _updateSigningKeyData(
-            operatorId, [uint256(0), uint256(0)], [uint256(0), uint256(0), uint256(0), uint256(0)]
+        delete operators[operatorId].signingKey; // TODO: Add this to the queue logic as a new action of kick
+        emit OperatorSigningKeyUpdated(
+            operatorId,
+            lastUpdateEpoch,
+            [uint256(0), uint256(0)],
+            [uint256(0), uint256(0), uint256(0), uint256(0)]
         );
         _updateApk(oldKey, false);
         _updateOperatorBitmap(operatorId, false);
@@ -252,15 +264,6 @@ contract Registry is Ownable, EIP712 {
         delete registeredOperators[operatorId];
         delete operatorIds[operator];
         emit OperatorDeregistered(operatorId);
-    }
-
-    function _updateSigningKeyData(
-        uint8 operatorId,
-        uint256[2] memory signingKey,
-        uint256[4] memory pubkeyG2
-    ) internal {
-        operators[operatorId].signingKey = signingKey;
-        emit OperatorSigningKeyUpdated(operatorId, signingKey, pubkeyG2);
     }
 
     function _validateKey(
@@ -473,23 +476,15 @@ contract Registry is Ownable, EIP712 {
     ) internal {
         mapping(uint8 => uint256[2]) storage updates = signingKeyChangeQueue[epoch];
 
+        /// TODO: optimize not needing to loop through all the ids
         for (uint8 operatorId = 0; operatorId < nextOperatorId; operatorId++) {
             uint256[2] memory newSigningKey = updates[operatorId];
             if (newSigningKey[0] != 0 || newSigningKey[1] != 0) {
                 // Update the operator's signing key
                 operators[operatorId].signingKey = newSigningKey;
-
-                // Emit event for signing key update
-                emit OperatorSigningKeyUpdated(
-                    operatorId, newSigningKey, [uint256(0), uint256(0), uint256(0), uint256(0)]
-                );
-
                 // Remove the update from the queue
                 delete updates[operatorId];
-                // delete signingKeyChangeQueue[epoch][operatorId];
             }
         }
-
-        // Remove the epoch from the queue if all updates have been processed
     }
 }
