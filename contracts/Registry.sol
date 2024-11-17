@@ -65,6 +65,7 @@ contract Registry is Ownable, EIP712 {
     event OperatorBitmapUpdated(uint256 newBitmap);
 
     error AlreadyRegistered(uint8 operatorId);
+    error NotActive(uint8 operatorId);
     error NotRegistered(uint8 operatorId);
     error InvalidOperator(address operator);
     error NotAuthorized();
@@ -88,7 +89,7 @@ contract Registry is Ownable, EIP712 {
         }
         uint8 operatorId = _registerOperator(msg.sender);
         uint256 effectiveEpoch = _queueOperatorUpdate(operatorId, signingKey, Action.ENTRY);
-        emit OperatorSigningKeyUpdated(operatorId, effectiveEpoch, signingKey, proof.pubkeyG2);
+        emit OperatorSigningKeyUpdated(operatorId, effectiveEpoch, signingKey, proof.pubkeyG2); /// TODO: Consider having these updates go through the queue. asymetry
         return (operatorId, effectiveEpoch);
     }
 
@@ -131,7 +132,7 @@ contract Registry is Ownable, EIP712 {
         }
         uint256[2] memory oldKey = operators[operatorId].signingKey;
         _deregisterOperator(operatorId);
-        delete operators[operatorId].signingKey; // TODO: Add this to the queue logic as a new action of kick
+        delete operators[operatorId].signingKey; // TODO: Add this to the queue logic as a new action of KICK
         emit OperatorSigningKeyUpdated(
             operatorId,
             lastUpdateEpoch,
@@ -161,19 +162,25 @@ contract Registry is Ownable, EIP712 {
 
     function getOperatorsApk(
         uint8[] memory ids
-    ) external view returns (uint256[2] memory apk) {
+    ) external view returns (uint256[2] memory operatorsApk) {
         if (_needsQueueProcessing()) {
             revert QueueNeedsProcessing();
         }
         uint256 length = ids.length;
         require(length > 0, "No operator IDs provided");
-        apk = [uint256(0), uint256(0)];
+
+        operatorsApk = [uint256(0), uint256(0)];
+        uint8 lastId;
         for (uint256 i = 0; i < length; i++) {
             uint8 operatorId = ids[i];
-            if (!isRegistered(operatorId)) {
-                revert NotRegistered(operatorId);
+            if (i > 0 && operatorId <= lastId) {
+                revert("Operator IDs must be sorted and unique");
             }
-            apk = BLS.aggregate(apk, operators[operatorId].signingKey);
+            if (!isActive(operatorId)) {
+                revert NotActive(operatorId);
+            }
+            operatorsApk = BLS.aggregate(operatorsApk, operators[operatorId].signingKey);
+            lastId = operatorId;
         }
     }
 
@@ -223,12 +230,12 @@ contract Registry is Ownable, EIP712 {
 
     function isActive(
         uint8 operatorId
-    ) external view returns (bool) {
-        if (!isRegistered(operatorId)) {
-            return false;
-        }
+    ) public view returns (bool) {
         Operator memory operator = operators[operatorId];
         uint256 currentEpoch = EpochLib.currentEpoch(genesisTime, SLOT_DURATION, SLOTS_PER_EPOCH);
+        if (operator.activationEpoch == 0 && currentEpoch == 0){
+            return false;
+        }
         if (operator.activationEpoch > currentEpoch) {
             return false;
         }
@@ -241,6 +248,9 @@ contract Registry is Ownable, EIP712 {
     function _registerOperator(
         address operator
     ) internal returns (uint8) {
+        if (operatorIds[operator] != 0 || registeredOperators[0] && operator == operators[0].operator) {
+            revert AlreadyRegistered(operatorIds[operator]); /// TODO: Cleanup redundant storage
+        }
         uint8 operatorId = _getNextAvailableOperatorId();
         operators[operatorId] = Operator({
             operator: operator,
