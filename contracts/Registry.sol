@@ -53,6 +53,9 @@ contract Registry is Ownable, EIP712 {
     mapping(uint256 => uint8[4]) public exitQueue;
     mapping(uint256 => uint256[2]) public apkChangeQueue;
 
+    /// @notice Mapping of scheduled signing key updates per epoch and operator
+    mapping(uint256 => mapping(uint8 => uint256[2])) public signingKeyChangeQueue;
+
     event OperatorRegistered(uint8 indexed operatorId, address indexed operator);
     event OperatorSigningKeyUpdated(
         uint8 indexed operatorId, uint256[2] signingKey, uint256[4] pubkeyG2
@@ -67,6 +70,7 @@ contract Registry is Ownable, EIP712 {
     error NotAuthorized();
     error OperatorLimitReached();
     error InvalidSignature();
+    error QueueNeedsProcessing();
 
     constructor(
         address initialOwner
@@ -137,14 +141,18 @@ contract Registry is Ownable, EIP712 {
     }
 
     function operatorBitmap() external view returns (uint256) {
-        /// TODO: If _processQueuess revert
+        if (_needsQueueProcessing()) {
+            revert QueueNeedsProcessing();
+        }
         return activeOperatorBitmap;
     }
 
     function getOperatorsApk(
         uint8[] memory ids
     ) external view returns (uint256[2] memory apk) {
-        /// TODO: If _processQueuess revert
+        if (_needsQueueProcessing()) {
+            revert QueueNeedsProcessing();
+        }
         uint256 length = ids.length;
         require(length > 0, "No operator IDs provided");
         apk = [uint256(0), uint256(0)];
@@ -320,14 +328,20 @@ contract Registry is Ownable, EIP712 {
 
     function _updateOperatorKey(
         uint8 operatorId,
-        uint256[2] memory signingKey
+        uint256[2] memory newSigningKey
     ) internal returns (uint256) {
         uint256[2] memory oldKey = operators[operatorId].signingKey;
-        operators[operatorId].signingKey = signingKey;
         uint256 currentEpoch = EpochLib.currentEpoch(genesisTime, SLOT_DURATION, SLOTS_PER_EPOCH);
-        uint256[2] memory apkDelta = BLS.sub(signingKey, oldKey);
-        apkChangeQueue[currentEpoch] = BLS.aggregate(apkChangeQueue[currentEpoch], apkDelta);
-        return currentEpoch;
+        uint256 effectiveEpoch = currentEpoch + 1; // Schedule for next epoch
+
+        // Schedule the signing key update
+        signingKeyChangeQueue[effectiveEpoch][operatorId] = newSigningKey;
+
+        // Schedule the apkG1 update
+        uint256[2] memory apkDelta = BLS.sub(newSigningKey, oldKey);
+        apkChangeQueue[effectiveEpoch] = BLS.aggregate(apkChangeQueue[effectiveEpoch], apkDelta);
+
+        return effectiveEpoch;
     }
 
     function _addToQueue(
@@ -353,12 +367,20 @@ contract Registry is Ownable, EIP712 {
 
     function _processQueuesIfNecessary() internal {
         if (_needsQueueProcessing()) {
-            uint256 currentEpoch =
-                EpochLib.currentEpoch(genesisTime, SLOT_DURATION, SLOTS_PER_EPOCH);
+            uint256 currentEpoch = EpochLib.currentEpoch(
+                genesisTime,
+                SLOT_DURATION,
+                SLOTS_PER_EPOCH
+            );
 
             for (uint256 epoch = lastUpdateEpoch + 1; epoch <= currentEpoch; epoch++) {
                 _processQueue(entryQueue, pendingEntries, MAX_CHURN_ENTRIES, epoch, true);
                 _processQueue(exitQueue, pendingExits, MAX_CHURN_EXITS, epoch, false);
+
+                // Apply signing key updates scheduled for this epoch
+                _processSigningKeyUpdates(epoch);
+
+                // Apply apkG1 changes for this epoch
                 _applyApkChanges(epoch);
             }
 
@@ -447,5 +469,30 @@ contract Registry is Ownable, EIP712 {
         uint256 currentEpoch = EpochLib.currentEpoch(genesisTime, SLOT_DURATION, SLOTS_PER_EPOCH);
         uint256 epochsNeeded = pendingExits / MAX_CHURN_EXITS + 1;
         return currentEpoch + epochsNeeded;
+    }
+
+    function _processSigningKeyUpdates(uint256 epoch) internal {
+        mapping(uint8 => uint256[2]) storage updates = signingKeyChangeQueue[epoch];
+
+        for (uint8 operatorId = 0; operatorId < nextOperatorId; operatorId++) {
+            uint256[2] memory newSigningKey = updates[operatorId];
+            if (newSigningKey[0] != 0 || newSigningKey[1] != 0) {
+                // Update the operator's signing key
+                operators[operatorId].signingKey = newSigningKey;
+
+                // Emit event for signing key update
+                emit OperatorSigningKeyUpdated(
+                    operatorId,
+                    newSigningKey,
+                    [uint256(0), uint256(0), uint256(0), uint256(0)]
+                );
+
+                // Remove the update from the queue
+                delete updates[operatorId];
+                // delete signingKeyChangeQueue[epoch][operatorId];
+            }
+        }
+
+        // Remove the epoch from the queue if all updates have been processed
     }
 }

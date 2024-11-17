@@ -234,6 +234,8 @@ contract UpdateSigningKeyTest is RegistrySetup {
             Registry.Proof({signature: signature, pubkeyG2: operators[0].blsWallet.publicKey});
 
         registry.updateSigningKey(operators[0].blsWallet.publicKeyG1, updateProof);
+        warpToNextEpoch();
+        registry.processQueues();
 
         (, uint256[2] memory updatedKey) = registry.getOperator(operatorId);
         assertEq(
