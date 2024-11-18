@@ -305,12 +305,12 @@ contract RegisterTest is RegistrySetup {
         assertEq(firstEpoch, currentEpoch + 1);
 
         // Register enough operators to fill first epoch's queue
-        for (uint256 i = 1; i < registry.MAX_CHURN_ENTRIES(); i++) {
+        for (uint256 i = 1; i < registry.MAX_CHURN(); i++) {
             registerOperator(i);
         }
 
         // Next operator should be scheduled for following epoch
-        (uint8 nextId,) = registerOperator(registry.MAX_CHURN_ENTRIES());
+        (uint8 nextId,) = registerOperator(registry.MAX_CHURN());
         uint256 nextEpoch = registry.getActivationEpoch(nextId);
         assertEq(nextEpoch, currentEpoch + 2);
 
@@ -318,7 +318,7 @@ contract RegisterTest is RegistrySetup {
         registry.processQueues();
 
         // Verify first batch is active
-        for (uint256 i = 0; i < registry.MAX_CHURN_ENTRIES(); i++) {
+        for (uint256 i = 0; i < registry.MAX_CHURN(); i++) {
             assertTrue(registry.isActive(uint8(i)));
         }
 
@@ -699,7 +699,7 @@ contract DeregisterTest is RegistrySetup {
     }
 
     function testDeregisterEffectiveEpoch() public {
-        for (uint256 i = 0; i < registry.MAX_CHURN_EXITS() + 1; i++) {
+        for (uint256 i = 0; i < registry.MAX_CHURN() + 1; i++) {
             registerOperator(i);
         }
 
@@ -708,18 +708,18 @@ contract DeregisterTest is RegistrySetup {
 
         uint256 currentEpoch = getCurrentEpoch();
 
-        for (uint256 i = 0; i < registry.MAX_CHURN_EXITS(); i++) {
+        for (uint256 i = 0; i < registry.MAX_CHURN(); i++) {
             deregisterOperator(i);
         }
 
-        // First MAX_CHURN_EXITS operators should be scheduled for next epoch
-        for (uint256 i = 0; i < registry.MAX_CHURN_EXITS(); i++) {
+        // First MAX_CHURN operators should be scheduled for next epoch
+        for (uint256 i = 0; i < registry.MAX_CHURN(); i++) {
             assertEq(registry.getDeactivationEpoch(uint8(i)), currentEpoch + 1);
         }
 
         // Additional deregistration should be scheduled for epoch after
-        deregisterOperator(registry.MAX_CHURN_EXITS());
-        assertEq(registry.getDeactivationEpoch(uint8(registry.MAX_CHURN_EXITS())), currentEpoch + 2);
+        deregisterOperator(registry.MAX_CHURN());
+        assertEq(registry.getDeactivationEpoch(uint8(registry.MAX_CHURN())), currentEpoch + 2);
     }
 }
 

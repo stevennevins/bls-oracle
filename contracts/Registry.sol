@@ -32,8 +32,8 @@ contract Registry is Ownable, EIP712 {
 
     uint256 public constant SLOTS_PER_EPOCH = 24; // 1 day epochs
     uint256 public constant SLOT_DURATION = 1 hours; // 1 hour slots
-    uint256 public constant MAX_CHURN_ENTRIES = 4; // Maximum entries per epoch
-    uint256 public constant MAX_CHURN_EXITS = 4; // Maximum exits per epoch
+    uint256 public constant MAX_CHURN = 4; // Maximum entries per epoch
+    /// TODO: Need MAX_QUEUE_SIZE
     uint256 public constant MAX_ACTIVE_OPERATORS = 200;
 
     mapping(uint8 => Operator) public operators;
@@ -49,8 +49,8 @@ contract Registry is Ownable, EIP712 {
     uint256 public pendingEntries;
     uint256 public pendingExits;
 
-    mapping(uint256 => uint8[4]) public entryQueue;
-    mapping(uint256 => uint8[4]) public exitQueue;
+    mapping(uint256 => uint8[MAX_CHURN]) public entryQueue;
+    mapping(uint256 => uint8[MAX_CHURN]) public exitQueue;
     mapping(uint256 => uint256[2]) public apkChangeQueue;
 
     /// @notice Mapping of scheduled signing key updates per epoch and operator
@@ -371,7 +371,7 @@ contract Registry is Ownable, EIP712 {
         uint256[2] memory signingKey
     ) internal returns (uint256) {
         uint256 activationEpoch = _getNextEntryEpoch();
-        _addToQueue(entryQueue, operatorId, pendingEntries, MAX_CHURN_ENTRIES, true);
+        _addToQueue(entryQueue, operatorId, pendingEntries, MAX_CHURN, true);
         operators[operatorId].activationEpoch = activationEpoch;
         operators[operatorId].signingKey = signingKey;
         apkChangeQueue[activationEpoch] = BLS.aggregate(apkChangeQueue[activationEpoch], signingKey);
@@ -383,7 +383,7 @@ contract Registry is Ownable, EIP712 {
         uint256[2] memory signingKey
     ) internal returns (uint256) {
         uint256 deactivationEpoch = _getNextExitEpoch();
-        _addToQueue(exitQueue, operatorId, pendingExits, MAX_CHURN_EXITS, false);
+        _addToQueue(exitQueue, operatorId, pendingExits, MAX_CHURN, false);
         operators[operatorId].deactivationEpoch = deactivationEpoch;
         apkChangeQueue[deactivationEpoch] = BLS.sub(apkChangeQueue[deactivationEpoch], signingKey);
         return deactivationEpoch;
@@ -435,8 +435,8 @@ contract Registry is Ownable, EIP712 {
                 EpochLib.currentEpoch(genesisTime, SLOT_DURATION, SLOTS_PER_EPOCH);
 
             for (uint256 epoch = lastUpdateEpoch + 1; epoch <= currentEpoch; epoch++) {
-                _processQueue(entryQueue, pendingEntries, MAX_CHURN_ENTRIES, epoch, true);
-                _processQueue(exitQueue, pendingExits, MAX_CHURN_EXITS, epoch, false);
+                _processQueue(entryQueue, pendingEntries, MAX_CHURN, epoch, true);
+                _processQueue(exitQueue, pendingExits, MAX_CHURN, epoch, false);
 
                 // Apply signing key updates scheduled for this epoch
                 _processSigningKeyUpdates(epoch);
@@ -522,13 +522,13 @@ contract Registry is Ownable, EIP712 {
 
     function _getNextEntryEpoch() internal view returns (uint256) {
         uint256 currentEpoch = EpochLib.currentEpoch(genesisTime, SLOT_DURATION, SLOTS_PER_EPOCH);
-        uint256 epochsNeeded = pendingEntries / MAX_CHURN_ENTRIES + 1;
+        uint256 epochsNeeded = pendingEntries / MAX_CHURN + 1;
         return currentEpoch + epochsNeeded;
     }
 
     function _getNextExitEpoch() internal view returns (uint256) {
         uint256 currentEpoch = EpochLib.currentEpoch(genesisTime, SLOT_DURATION, SLOTS_PER_EPOCH);
-        uint256 epochsNeeded = pendingExits / MAX_CHURN_EXITS + 1;
+        uint256 epochsNeeded = pendingExits / MAX_CHURN + 1;
         return currentEpoch + epochsNeeded;
     }
 
