@@ -245,7 +245,46 @@ contract Registry is Ownable, EIP712 {
     function isRegistered(
         uint8 operatorId
     ) public view returns (bool) {
-        return registeredOperators[operatorId];
+        return operators[operatorId].activationEpoch > 0;
+        // return registeredOperators[operatorId];
+    }
+
+    function isEntering(
+        uint8 operatorId
+    ) public view returns (bool) {
+        uint256 currentEpoch = EpochLib.currentEpoch(genesisTime, SLOT_DURATION, SLOTS_PER_EPOCH);
+        return operators[operatorId].activationEpoch > currentEpoch && isRegistered(operatorId);
+    }
+
+    function isActive(
+        uint8 operatorId
+    ) public view returns (bool) {
+        Operator memory operator = operators[operatorId];
+        uint256 currentEpoch = EpochLib.currentEpoch(genesisTime, SLOT_DURATION, SLOTS_PER_EPOCH);
+        if (operator.activationEpoch == 0 && currentEpoch == 0) {
+            return false;
+        }
+        if (operator.activationEpoch > currentEpoch) {
+            return false;
+        }
+        if (operator.deactivationEpoch != 0 && operator.deactivationEpoch <= currentEpoch) {
+            return false;
+        }
+        return true;
+    }
+
+    function isExiting(
+        uint8 operatorId
+    ) public view returns (bool) {
+        uint256 currentEpoch = EpochLib.currentEpoch(genesisTime, SLOT_DURATION, SLOTS_PER_EPOCH);
+        return operators[operatorId].deactivationEpoch > currentEpoch && isRegistered(operatorId);
+    }
+
+    function hasKeyUpdateQueued(
+        uint8 operatorId
+    ) public view returns (bool) {
+        uint256 currentEpoch = EpochLib.currentEpoch(genesisTime, SLOT_DURATION, SLOTS_PER_EPOCH);
+        return operatorKeyUpdateEpoch[operatorId] > currentEpoch;
     }
 
     function calculateRegistrationHash(
@@ -274,22 +313,7 @@ contract Registry is Ownable, EIP712 {
         return operators[operatorId].deactivationEpoch;
     }
 
-    function isActive(
-        uint8 operatorId
-    ) public view returns (bool) {
-        Operator memory operator = operators[operatorId];
-        uint256 currentEpoch = EpochLib.currentEpoch(genesisTime, SLOT_DURATION, SLOTS_PER_EPOCH);
-        if (operator.activationEpoch == 0 && currentEpoch == 0) {
-            return false;
-        }
-        if (operator.activationEpoch > currentEpoch) {
-            return false;
-        }
-        if (operator.deactivationEpoch != 0 && operator.deactivationEpoch <= currentEpoch) {
-            return false;
-        }
-        return true;
-    }
+
 
     function _registerOperator(
         address operator
