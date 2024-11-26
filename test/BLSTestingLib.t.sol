@@ -564,4 +564,14 @@ contract BLSTestingLibTest is Test {
         assertTrue(callSuccess, "Precompile call failed");
         assertTrue(pairingSuccess, "Batch verification failed");
     }
+
+    function test_zeroG2Key() public {
+        uint256[4] memory zeroG2Key = [uint256(0), uint256(0), uint256(0), uint256(0)];
+
+        bool isValid = bls.isValidPublicKey(zeroG2Key);
+        assertFalse(isValid, "Zero G2 key should not be valid");
+
+        bool isOnCurve = bls.isOnCurveG2(zeroG2Key);
+        assertFalse(isOnCurve, "Zero G2 key should not be on curve");
+    }
 }
