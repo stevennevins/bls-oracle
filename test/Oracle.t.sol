@@ -6,6 +6,7 @@ import {Registry} from "../contracts/Registry.sol";
 import {Oracle} from "../contracts/Oracle.sol";
 import {BLSWallet, BLSTestingLib} from "./utils/BLSTestingLib.sol";
 import {BLS} from "./utils/BLS.sol";
+import {EpochLib} from "../contracts/EpochLib.sol";
 
 contract OracleSetup is Test {
     struct Operator {
@@ -48,7 +49,19 @@ contract OracleSetup is Test {
 
             registry.register(operators[i].blsWallet.publicKeyG1, proof);
             vm.stopPrank();
+            warpToNextEpoch();
+            registry.processQueues();
         }
+    }
+
+    function warpToNextEpoch() internal {
+        uint256 currentSlot = EpochLib.currentSlot(block.timestamp, registry.SLOT_DURATION());
+        uint256 currentEpoch = EpochLib.slotToEpoch(currentSlot, registry.SLOTS_PER_EPOCH());
+        uint256 nextEpochStartSlot =
+            EpochLib.epochStartSlot(currentEpoch + 1, registry.SLOTS_PER_EPOCH());
+        uint256 nextEpochStartTime =
+            EpochLib.slotToTime(nextEpochStartSlot, block.timestamp, registry.SLOT_DURATION());
+        vm.warp(nextEpochStartTime);
     }
 
     function logBitmap(
